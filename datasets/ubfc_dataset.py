@@ -62,37 +62,68 @@ def parse_ubfc_ground_truth(gt_file_path):
 def find_subject_directories(root_dir=None):
     """
     Finds all subject folders in the dataset directory (e.g., subject1, subject2, ...).
-    Supports both local data folder and Kaggle input folder.
+    Recursively scans /kaggle/input and subfolders to find subject directories regardless
+    of dataset folder structure or nested directories.
     """
-    search_dirs = [
-        root_dir,
+    search_dirs = []
+    if root_dir and os.path.exists(root_dir):
+        search_dirs.append(root_dir)
+
+    # Check /kaggle/input and its immediate subdirectories
+    if os.path.exists("/kaggle/input"):
+        search_dirs.append("/kaggle/input")
+        try:
+            for item in os.listdir("/kaggle/input"):
+                sub = os.path.join("/kaggle/input", item)
+                if os.path.isdir(sub):
+                    search_dirs.append(sub)
+        except Exception:
+            pass
+
+    search_dirs.extend([
         config.UBFC_RAW_DIR,
         config.KAGGLE_INPUT_DIR,
+        config.DATA_DIR,
         os.path.join(config.DATA_DIR, "ubfc_raw"),
         os.path.join(config.DATA_DIR, "ubfc-rppg-dataset"),
-    ]
-
-    base_path = None
-    for d in search_dirs:
-        if d and os.path.exists(d):
-            base_path = d
-            break
-
-    if base_path is None:
-        return {}
+    ])
 
     subjects = {}
-    for entry in sorted(os.listdir(base_path)):
-        full_p = os.path.join(base_path, entry)
-        if os.path.isdir(full_p) and entry.lower().startswith("subject"):
-            vid_p = os.path.join(full_p, "vid.avi")
-            gt_p  = os.path.join(full_p, "ground_truth.txt")
-            if os.path.exists(vid_p) and os.path.exists(gt_p):
-                subjects[entry.lower()] = {
-                    "dir": full_p,
-                    "video": vid_p,
-                    "ground_truth": gt_p,
-                }
+    for base in search_dirs:
+        if not base or not os.path.exists(base):
+            continue
+
+        # Walk up to 4 levels deep to find subject directories
+        for root, dirs, files in os.walk(base):
+            base_name = os.path.basename(root).lower()
+            if base_name.startswith("subject") and ("ground_truth.txt" in files):
+                vid_path = None
+                for vf in ["vid.avi", "vid.mp4", "video.avi", "vid.mov"]:
+                    candidate = os.path.join(root, vf)
+                    if os.path.exists(candidate):
+                        vid_path = candidate
+                        break
+
+                if vid_path is None:
+                    for f in files:
+                        if f.lower().endswith((".avi", ".mp4", ".mov")):
+                            vid_path = os.path.join(root, f)
+                            break
+
+                gt_path = os.path.join(root, "ground_truth.txt")
+                if vid_path and os.path.exists(gt_path):
+                    if base_name not in subjects:
+                        subjects[base_name] = {
+                            "dir": root,
+                            "video": vid_path,
+                            "ground_truth": gt_path,
+                        }
+
+        if subjects:
+            break
+
+    if not subjects and os.path.exists("/kaggle/input"):
+        print(f"[INFO] Searched /kaggle/input. Available folders in /kaggle/input: {os.listdir('/kaggle/input')}")
 
     return subjects
 
