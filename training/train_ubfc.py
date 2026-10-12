@@ -52,16 +52,27 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
 
     frame_rgbs = []
 
-    # 1. Primary method: OpenCV with explicit FFmpeg backend & memory protection
+    # 1. Primary method: imageio-ffmpeg (memory-safe pipe, immune to OpenCV C++ double-free)
     try:
-        cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
-        if cap.isOpened():
-            while True:
+        import imageio.v2 as imageio
+        reader = imageio.get_reader(video_path)
+        for frame_rgb in reader:
+            h, w = frame_rgb.shape[:2]
+            bx, by, bw, bh = int(w * 0.20), int(h * 0.15), int(w * 0.60), int(h * 0.70)
+            crop = frame_rgb[by : by + bh, bx : bx + bw]
+            if crop.size > 0:
+                mean_rgb = np.mean(crop, axis=(0, 1), dtype=np.float32)
+                frame_rgbs.append(mean_rgb)
+        reader.close()
+    except Exception as e_im:
+        # Fallback to OpenCV if imageio is unavailable
+        try:
+            cap = cv2.VideoCapture(video_path)
+            while cap.isOpened():
                 ret, frame_bgr = cap.read()
                 if not ret or frame_bgr is None or frame_bgr.size == 0:
                     break
                 h, w = frame_bgr.shape[:2]
-                # Fast ROI crop around face center before color conversion
                 bx, by, bw, bh = int(w * 0.20), int(h * 0.15), int(w * 0.60), int(h * 0.70)
                 crop_bgr = frame_bgr[by : by + bh, bx : bx + bw]
                 if crop_bgr.size > 0:
@@ -69,24 +80,8 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
                     mean_rgb = np.mean(crop_rgb, axis=(0, 1), dtype=np.float32)
                     frame_rgbs.append(mean_rgb)
             cap.release()
-    except Exception as e:
-        print(f"[WARN] cv2 failed on {video_path}: {e}")
-
-    # 2. Fallback method: imageio-ffmpeg pipe (bulletproof against OpenCV C++ memory crashes)
-    if len(frame_rgbs) == 0:
-        try:
-            import imageio.v2 as imageio
-            reader = imageio.get_reader(video_path, format="ffmpeg")
-            for frame_rgb in reader:
-                h, w = frame_rgb.shape[:2]
-                bx, by, bw, bh = int(w * 0.20), int(h * 0.15), int(w * 0.60), int(h * 0.70)
-                crop = frame_rgb[by : by + bh, bx : bx + bw]
-                if crop.size > 0:
-                    mean_rgb = np.mean(crop, axis=(0, 1), dtype=np.float32)
-                    frame_rgbs.append(mean_rgb)
-            reader.close()
-        except Exception as e:
-            print(f"[WARN] imageio fallback failed on {video_path}: {e}")
+        except Exception:
+            pass
 
     if len(frame_rgbs) < window_size:
         return None, None, None
@@ -152,11 +147,14 @@ def preprocess_all_subjects(output_npz=None):
         split_name = "train" if s_name in train_set else ("val" if s_name in val_set else "test")
         pbar.set_postfix({"Subject": s_name, "Split": split_name.upper()})
 
-        X, y_b, y_s = extract_subject_features(paths["video"], paths["ground_truth"])
-        if X is not None and len(X) > 0:
-            splits_data[split_name]["X"].append(X)
-            splits_data[split_name]["bpm"].append(y_b)
-            splits_data[split_name]["stress"].append(y_s)
+        try:
+            X, y_b, y_s = extract_subject_features(paths["video"], paths["ground_truth"])
+            if X is not None and len(X) > 0:
+                splits_data[split_name]["X"].append(X)
+                splits_data[split_name]["bpm"].append(y_b)
+                splits_data[split_name]["stress"].append(y_s)
+        except Exception as e_sub:
+            print(f"\n[WARN] Skipped {s_name} due to: {e_sub}")
 
     # Concatenate and save
     save_dict = {}
