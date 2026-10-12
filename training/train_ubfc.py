@@ -308,13 +308,20 @@ def run_training(train_loader, val_loader, epochs=config.EPOCHS, lr=config.LEARN
         is_best = val_loss < best_val_loss
         if is_best:
             best_val_loss = val_loss
-            torch.save({
+            ckpt_data = {
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
                 "val_loss": val_loss,
                 "val_mae_bpm": val_mae,
                 "val_stress_acc": val_acc,
-            }, save_ckpt)
+            }
+            torch.save(ckpt_data, save_ckpt)
+            local_ckpt = os.path.join(config.CHECKPOINTS_DIR, "best_ubfc_stress_model.pth")
+            if local_ckpt != save_ckpt:
+                try:
+                    torch.save(ckpt_data, local_ckpt)
+                except Exception:
+                    pass
 
         status_mark = " [*BEST]" if is_best else ""
         print(

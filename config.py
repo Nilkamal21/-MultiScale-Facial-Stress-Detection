@@ -22,8 +22,8 @@ KAGGLE_INPUT_DIR    = "/kaggle/input/ubfc-rppg-dataset"
 KAGGLE_WORKING_DIR  = "/kaggle/working"
 
 # Check if running in Kaggle environment or locally
-IS_KAGGLE = os.path.exists(KAGGLE_INPUT_DIR)
-UBFC_RAW_DIR = KAGGLE_INPUT_DIR if IS_KAGGLE else os.path.join(DATA_DIR, "ubfc_raw")
+IS_KAGGLE = os.path.exists("/kaggle")
+UBFC_RAW_DIR = KAGGLE_INPUT_DIR if os.path.exists(KAGGLE_INPUT_DIR) else os.path.join(DATA_DIR, "ubfc_raw")
 
 # Ensure local directories exist
 for folder in [DATA_DIR, CHECKPOINTS_DIR, RESULTS_DIR, LOGS_DIR]:

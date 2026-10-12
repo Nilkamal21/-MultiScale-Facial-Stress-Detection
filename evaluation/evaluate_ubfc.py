@@ -49,10 +49,17 @@ def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     if model_path is None:
-        if config.IS_KAGGLE:
-            model_path = os.path.join(config.KAGGLE_WORKING_DIR, "best_ubfc_stress_model.pth")
-        else:
-            model_path = os.path.join(config.CHECKPOINTS_DIR, "best_ubfc_stress_model.pth")
+        candidates = [
+            os.path.join(config.KAGGLE_WORKING_DIR, "best_ubfc_stress_model.pth"),
+            os.path.join(config.CHECKPOINTS_DIR, "best_ubfc_stress_model.pth"),
+            "best_ubfc_stress_model.pth"
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                model_path = c
+                break
+        if model_path is None:
+            model_path = candidates[0]
             
     if results_dir is None:
         results_dir = config.RESULTS_DIR

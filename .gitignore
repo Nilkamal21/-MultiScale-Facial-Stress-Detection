@@ -6,6 +6,7 @@ __pycache__/
 # Data & Large checkpoints
 data/
 *.npz
+*.pth
 *.7z
 *.zip
 *.avi
