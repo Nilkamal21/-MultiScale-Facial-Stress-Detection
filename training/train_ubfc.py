@@ -65,7 +65,7 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
             fw = max(5, int(w * 0.50))
             forehead_crop = frame_rgb[fy : fy + fh, fx : fx + fw]
             if forehead_crop.size > 0:
-                mean_rgb = np.mean(forehead_crop, axis=(0, 1), dtype=np.float32)
+                mean_rgb = np.mean(forehead_crop, axis=(0, 1)).astype(np.float32)  # type: ignore
                 frame_rgbs.append(mean_rgb)
         reader.close()
     except Exception as e_im:
@@ -84,7 +84,7 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
                 forehead_bgr = frame_bgr[fy : fy + fh, fx : fx + fw]
                 if forehead_bgr.size > 0:
                     forehead_rgb = cv2.cvtColor(forehead_bgr, cv2.COLOR_BGR2RGB)
-                    mean_rgb = np.mean(forehead_rgb, axis=(0, 1), dtype=np.float32)
+                    mean_rgb = np.mean(forehead_rgb, axis=(0, 1)).astype(np.float32)  # type: ignore
                     frame_rgbs.append(mean_rgb)
             cap.release()
         except Exception:
@@ -202,7 +202,8 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch=1, to
     total_loss, total_bpm_err, total_stress_correct, total_samples = 0.0, 0.0, 0, 0
 
     pbar = tqdm(dataloader, desc=f"Epoch [{epoch:02d}/{total_epochs:02d}] Train", leave=False)
-    for X, y_bpm, y_stress in pbar:
+    for batch in pbar:
+        X, y_bpm, y_stress = batch[0], batch[1], batch[2]
         X = X.to(device)
         y_bpm = y_bpm.to(device)
         y_stress = y_stress.to(device)
@@ -243,7 +244,8 @@ def evaluate_model(model, dataloader, criterion, device):
 
     with torch.no_grad():
         pbar = tqdm(dataloader, desc="Evaluating", leave=False)
-        for X, y_bpm, y_stress in pbar:
+        for batch in pbar:
+            X, y_bpm, y_stress = batch[0], batch[1], batch[2]
             X = X.to(device)
             y_bpm = y_bpm.to(device)
             y_stress = y_stress.to(device)

@@ -88,7 +88,8 @@ def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_
     print("[Evaluation] Running inference over test windows with progress bar...")
     with torch.no_grad():
         pbar = tqdm(test_loader, desc="Testing", unit="batch")
-        for X, y_bpm, y_stress in pbar:
+        for batch in pbar:
+            X, y_bpm, y_stress = batch[0], batch[1], batch[2]
             X = X.to(device)
             pred_bpm, pred_stress_logits, _ = model(X)
 
