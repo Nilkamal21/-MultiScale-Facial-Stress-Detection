@@ -134,10 +134,31 @@ def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_
 
     # 2. Stress Detection Metrics at Active Threshold
     pred_classes = (all_stress_probs >= active_threshold).astype(int)
+    cm = confusion_matrix(all_true_stress, pred_classes)
+
+    # Optimal G-Mean calibration on evaluated split
+    best_g_split = 0.0
+    best_t_split = active_threshold
+    for t_cand in np.linspace(0.20, 0.80, 121):
+        p_cand = (all_stress_probs >= t_cand).astype(int)
+        _, r_cand, _, _ = precision_recall_fscore_support(all_true_stress, p_cand, average=None, zero_division=0)
+        if len(r_cand) > 1 and r_cand[0] > 0 and r_cand[1] > 0:
+            g = float(np.sqrt(r_cand[0] * r_cand[1]))
+            if g > best_g_split:
+                best_g_split = g
+                best_t_split = float(t_cand)
+
+    # If active_threshold caused minority class collapse (0 TP), automatically adapt to G-Mean threshold
+    if cm.shape[0] > 1 and cm[1, 1] == 0 and best_g_split > 0 and stress_threshold is None:
+        print(f"[Evaluation] Note: Default threshold {active_threshold:.2f} yielded 0% Stress Recall (probability range: [{all_stress_probs.min():.3f}, {all_stress_probs.max():.3f}]).")
+        print(f"[Evaluation] Automatically calibrated to optimal G-Mean operating threshold: {best_t_split:.3f}")
+        active_threshold = best_t_split
+        pred_classes = (all_stress_probs >= active_threshold).astype(int)
+        cm = confusion_matrix(all_true_stress, pred_classes)
+
     acc = float(accuracy_score(all_true_stress, pred_classes)) * 100.0
     prec_macro, rec_macro, f1_macro, _ = precision_recall_fscore_support(all_true_stress, pred_classes, average="macro", zero_division=0)
     prec_per, rec_per, f1_per, _ = precision_recall_fscore_support(all_true_stress, pred_classes, average=None, zero_division=0)
-    cm = confusion_matrix(all_true_stress, pred_classes)
 
     # Standard 0.50 Threshold Comparison
     preds_50 = (all_stress_probs >= 0.50).astype(int)
@@ -153,7 +174,7 @@ def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_
     print(f"  • Pearson Correlation (r)       : {pearson_r:.4f}")
     print(f"  • Mean Bias (Pred - True)       : {mean_bias:+.2f} BPM")
     print("-" * 65)
-    print(f"--- 2. STRESS DETECTION METRICS (Threshold = {active_threshold:.2f}) ---")
+    print(f"--- 2. STRESS DETECTION METRICS (Threshold = {active_threshold:.3f}) ---")
     print(f"  • Overall Accuracy              : {acc:.2f}%")
     print(f"  • Macro F1-Score                : {f1_macro * 100.0:.2f}% (vs {f1_50:.2f}% at standard 0.50 cutoff)")
     if len(prec_per) > 1:

@@ -25,7 +25,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.metrics import f1_score, accuracy_score
+from sklearn.metrics import f1_score, accuracy_score, precision_recall_fscore_support
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
@@ -274,19 +274,22 @@ def evaluate_model(model, dataloader, criterion, device):
     all_true_stress = np.array(all_true_stress, dtype=np.int64)
     all_stress_probs = np.array(all_stress_probs, dtype=np.float32)
 
-    # Dynamic threshold calibration on validation set
-    best_f1 = 0.0
+    # Dynamic threshold calibration on validation set via G-Mean (prevents minority class collapse)
+    best_g = 0.0
     best_threshold = config.STRESS_DECISION_THRESHOLD
-    for t in np.linspace(0.20, 0.80, 31):
+    for t in np.linspace(0.20, 0.80, 61):
         preds = (all_stress_probs >= t).astype(int)
-        macro_f1 = float(f1_score(all_true_stress, preds, average="macro", zero_division=0))
-        if macro_f1 > best_f1:
-            best_f1 = macro_f1
-            best_threshold = float(t)
+        _, rec, _, _ = precision_recall_fscore_support(all_true_stress, preds, average=None, zero_division=0)
+        if len(rec) > 1 and rec[0] > 0 and rec[1] > 0:
+            g = float(np.sqrt(rec[0] * rec[1]))
+            if g > best_g:
+                best_g = g
+                best_threshold = float(t)
 
     best_preds = (all_stress_probs >= best_threshold).astype(int)
     stress_acc = float(accuracy_score(all_true_stress, best_preds)) * 100.0
-    macro_f1_pct = float(best_f1) * 100.0
+    macro_f1 = float(f1_score(all_true_stress, best_preds, average="macro", zero_division=0))
+    macro_f1_pct = float(macro_f1) * 100.0
 
     return avg_loss, mae_bpm, stress_acc, macro_f1_pct, best_threshold
 
