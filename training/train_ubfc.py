@@ -13,8 +13,14 @@ import os
 import sys
 import time
 import argparse
+
+os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
+os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
 import numpy as np
 import cv2
+cv2.setNumThreads(1)
+cv2.ocl.setUseOpenCL(False)
+
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
@@ -44,26 +50,43 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
     true_bpm = gt_data["bpm"]
     baseline_bpm = gt_data["baseline_bpm"]
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"[WARN] Failed to open video: {video_path}")
-        return None, None, None
-
     frame_rgbs = []
-    while True:
-        ret, frame_bgr = cap.read()
-        if not ret:
-            break
-        # Convert to RGB
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        h, w = frame_rgb.shape[:2]
 
-        # Use center-face box heuristic (fast & robust on webcam close-ups)
-        bx, by, bw, bh = int(w * 0.20), int(h * 0.15), int(w * 0.60), int(h * 0.70)
-        rgb_mean = extract_frame_rgb_mean(frame_rgb, (bx, by, bw, bh))
-        frame_rgbs.append(rgb_mean)
+    # 1. Primary method: OpenCV with explicit FFmpeg backend & memory protection
+    try:
+        cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+        if cap.isOpened():
+            while True:
+                ret, frame_bgr = cap.read()
+                if not ret or frame_bgr is None or frame_bgr.size == 0:
+                    break
+                h, w = frame_bgr.shape[:2]
+                # Fast ROI crop around face center before color conversion
+                bx, by, bw, bh = int(w * 0.20), int(h * 0.15), int(w * 0.60), int(h * 0.70)
+                crop_bgr = frame_bgr[by : by + bh, bx : bx + bw]
+                if crop_bgr.size > 0:
+                    crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+                    mean_rgb = np.mean(crop_rgb, axis=(0, 1), dtype=np.float32)
+                    frame_rgbs.append(mean_rgb)
+            cap.release()
+    except Exception as e:
+        print(f"[WARN] cv2 failed on {video_path}: {e}")
 
-    cap.release()
+    # 2. Fallback method: imageio-ffmpeg pipe (bulletproof against OpenCV C++ memory crashes)
+    if len(frame_rgbs) == 0:
+        try:
+            import imageio.v2 as imageio
+            reader = imageio.get_reader(video_path, format="ffmpeg")
+            for frame_rgb in reader:
+                h, w = frame_rgb.shape[:2]
+                bx, by, bw, bh = int(w * 0.20), int(h * 0.15), int(w * 0.60), int(h * 0.70)
+                crop = frame_rgb[by : by + bh, bx : bx + bw]
+                if crop.size > 0:
+                    mean_rgb = np.mean(crop, axis=(0, 1), dtype=np.float32)
+                    frame_rgbs.append(mean_rgb)
+            reader.close()
+        except Exception as e:
+            print(f"[WARN] imageio fallback failed on {video_path}: {e}")
 
     if len(frame_rgbs) < window_size:
         return None, None, None
