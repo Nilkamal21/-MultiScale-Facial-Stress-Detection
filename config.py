@@ -86,6 +86,6 @@ DROPOUT_RATE       = 0.3         # Dropout probability to prevent overfitting
 # In UBFC, Task 2 involves a time-pressured math quiz that spikes heart rate.
 # A heart rate jump > 15% above resting baseline indicates acute mental stress.
 STRESS_ELEVATION_THRESHOLD = 0.15
-STRESS_DECISION_THRESHOLD  = 0.55 # Calibrated probability threshold for stress classification
+STRESS_DECISION_THRESHOLD  = 0.45 # Calibrated probability threshold for stress classification
 FOCAL_LOSS_GAMMA           = 2.0  # Focusing parameter for hard boundary examples
-FOCAL_LOSS_ALPHA           = 0.35 # Balanced positive class scaling
+FOCAL_LOSS_ALPHA           = 0.80 # Minority stress class scaling (penalizes false negatives 4x more than false positives)

@@ -162,17 +162,34 @@ class UBFCCachedDataset(Dataset):
             self.y_bpm = torch.tensor(data["y_bpm"], dtype=torch.float32)
             self.y_stress = torch.tensor(data["y_stress"], dtype=torch.long)
 
+        # 1. Clean corrupted pulse sensor readings (e.g. sensor disconnections where BPM < 40)
+        valid_bpm = self.y_bpm[(self.y_bpm >= 40.0) & (self.y_bpm <= 200.0)]
+        fallback_bpm = float(torch.median(valid_bpm)) if len(valid_bpm) > 0 else 75.0
+        self.y_bpm = torch.where((self.y_bpm < 40.0) | (self.y_bpm > 200.0), torch.tensor(fallback_bpm), self.y_bpm)
+
+        # 2. Seamless 4-Channel BVP synthesis: If npz contains 3 RGB channels or unpopulated BVP,
+        # synthesize filtered CHROM rPPG pulse waveforms in RAM (< 0.5s)
+        if self.X.size(-1) == 3 or (self.X.size(-1) >= 4 and torch.all(self.X[:, :, 3] == 0)):
+            x_np = self.X[:, :, :3].numpy()
+            bvp_list = []
+            for win_rgb in x_np:
+                bvp = chrom_rppg(win_rgb)
+                bvp_filt = butter_bandpass_filter(bvp, fs=config.VIDEO_FPS, low_hz=config.BANDPASS_LOW_HZ, high_hz=config.BANDPASS_HIGH_HZ)
+                bvp_norm = ((bvp_filt - np.mean(bvp_filt)) / (np.std(bvp_filt) + 1e-6)).reshape(-1, 1).astype(np.float32)
+                bvp_list.append(bvp_norm)
+            bvp_tensor = torch.tensor(np.array(bvp_list), dtype=torch.float32)
+            self.X = torch.cat([self.X[:, :, :3], bvp_tensor], dim=-1)
+
     def __len__(self):
         return len(self.X)
 
     def __getitem__(self, idx):
-        x = self.X[idx]  # (100, 3)
-        # Temporal Z-score normalization per channel across the 100 frames
-        # Eliminates static skin tone & lighting DC offsets, isolating pure BVP pulse oscillations
-        mean = torch.mean(x, dim=0, keepdim=True)
-        std = torch.std(x, dim=0, keepdim=True) + 1e-6
-        x_norm = (x - mean) / std
-        return x_norm, self.y_bpm[idx], self.y_stress[idx]
+        x = self.X[idx]  # (100, 4)
+        # Temporal Z-score normalization on RGB channels
+        rgb_norm = (x[:, :3] - x[:, :3].mean(dim=0, keepdim=True)) / (x[:, :3].std(dim=0, keepdim=True) + 1e-6)
+        bvp_ch = x[:, 3:4]
+        x_4ch = torch.cat([rgb_norm, bvp_ch], dim=-1)
+        return x_4ch, self.y_bpm[idx], self.y_stress[idx]
 
 
 # ==============================================================================

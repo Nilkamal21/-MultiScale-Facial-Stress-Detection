@@ -97,29 +97,57 @@ class DualHeadUBFCStressModel(nn.Module):
         # 3. Temporal Attention Pooling
         self.attention = TemporalAttention(hidden_dim=self.bi_hidden_dim)
 
-        # 4. Shared Representation Layer
-        self.shared_fc = nn.Sequential(
+        # 4. Temporal Representation Layer (uses LayerNorm for batch-size invariance)
+        self.temporal_fc = nn.Sequential(
             nn.Linear(self.bi_hidden_dim, 64),
-            nn.BatchNorm1d(64),
+            nn.LayerNorm(64),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
 
-        # 5. Output Head 1: Heart Rate Regression Head (Predicts BPM)
-        self.hr_head = nn.Sequential(
-            nn.Linear(64, 32),
+        # 5. Spectral Representation Layer (Cardiac frequency band: 48 bins)
+        self.spectral_fc = nn.Sequential(
+            nn.Linear(48, 32),
+            nn.LayerNorm(32),
             nn.ReLU(),
-            nn.Linear(32, 1)
+            nn.Dropout(dropout)
         )
-        # Initialize output bias to average human heart rate (~80 BPM)
-        nn.init.constant_(self.hr_head[-1].bias, 80.0)
 
-        # 6. Output Head 2: Stress Classification Head (Conditioned on features + predicted BPM)
-        self.stress_head = nn.Sequential(
-            nn.Linear(65, 32),
+        # 6. Output Head 1: Heart Rate Regression Head (fused 64 + 32 + 1 = 97)
+        self.hr_head = nn.Sequential(
+            nn.Linear(97, 64),
             nn.ReLU(),
-            nn.Linear(32, 2)
+            nn.Dropout(dropout),
+            nn.Linear(64, 1)
         )
+        # Initialize output bias to average human heart rate (~85 BPM)
+        nn.init.constant_(self.hr_head[-1].bias, 85.0)
+
+        # 7. Output Head 2: Stress Classification Head (conditioned on fused features + predicted BPM)
+        self.stress_head = nn.Sequential(
+            nn.Linear(97, 48),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(48, 2)
+        )
+
+    def extract_spectrum(self, pulse):
+        """
+        Extracts zero-padded FFT power spectrum over 0.7 - 3.5 Hz (42 - 210 BPM).
+        Returns normalized 48-bin power spectrum and dominant peak BPM.
+        """
+        w = torch.hann_window(pulse.size(-1), periodic=False, device=pulse.device)
+        win_pulse = (pulse - pulse.mean(dim=-1, keepdim=True)) * w
+        fft_res = torch.fft.rfft(win_pulse, n=512)
+        mag = torch.abs(fft_res)
+        freqs = torch.fft.rfftfreq(512, d=1.0 / config.VIDEO_FPS, device=pulse.device)
+        valid = (freqs >= config.BANDPASS_LOW_HZ) & (freqs <= config.BANDPASS_HIGH_HZ)
+        valid_mag = mag[:, valid]
+        spec_norm = valid_mag / (valid_mag.sum(dim=-1, keepdim=True) + 1e-6)
+        valid_freqs = freqs[valid]
+        peak_idx = torch.argmax(valid_mag, dim=-1)
+        peak_bpm = (valid_freqs[peak_idx] * 60.0).unsqueeze(-1)
+        return spec_norm, peak_bpm
 
     def forward(self, x):
         """
@@ -127,20 +155,30 @@ class DualHeadUBFCStressModel(nn.Module):
         Args:
             x: (Batch, Seq_Len, Input_Dim)
         """
-        # Project inputs
+        # Extract pulse channel for spectral frequency analysis
+        if x.size(-1) >= 4:
+            pulse = x[:, :, 3]
+        else:
+            pulse = x[:, :, 1]  # Green channel fallback
+
+        spec_norm, peak_bpm = self.extract_spectrum(pulse)
+        spec_features = self.spectral_fc(spec_norm)
+
+        # Project inputs and pass through BiGRU
         projected = self.input_proj(x)
-        # Pass through BiGRU
         gru_out, _ = self.bigru(projected)  # (Batch, Seq_Len, bi_hidden_dim)
-        # Apply Temporal Attention spotlight
         context, attn_weights = self.attention(gru_out)  # (Batch, bi_hidden_dim)
-        # Shared dense representation
-        features = self.shared_fc(context)  # (Batch, 64)
+        temp_features = self.temporal_fc(context)  # (Batch, 64)
 
-        # Head 1: Predict Heart Rate BPM
-        pred_bpm = self.hr_head(features)  # (Batch, 1)
+        # Multi-modal fusion (Time Domain dynamics + Frequency Domain spectrum)
+        fused = torch.cat([temp_features, spec_features], dim=-1)  # (Batch, 96)
 
-        # Head 2: Predict Stress Logits (conditioned on features + normalized BPM)
-        stress_in = torch.cat([features, pred_bpm / 100.0], dim=-1)  # (Batch, 65)
+        # Head 1: Predict Heart Rate BPM (fused features + physical peak prior)
+        hr_in = torch.cat([fused, peak_bpm / 100.0], dim=-1)  # (Batch, 97)
+        pred_bpm = self.hr_head(hr_in)  # (Batch, 1)
+
+        # Head 2: Predict Stress Logits (conditioned on fused features + predicted BPM)
+        stress_in = torch.cat([fused, pred_bpm / 100.0], dim=-1)  # (Batch, 97)
         stress_logits = self.stress_head(stress_in)  # (Batch, 2)
 
         return pred_bpm, stress_logits, attn_weights
@@ -170,10 +208,10 @@ class FocalLoss(nn.Module):
 # ==============================================================================
 class UBFCMultiTaskLoss(nn.Module):
     """
-    Combined loss function optimizing both tasks simultaneously:
-        Loss = L_BPM (Smooth L1 Loss) + lambda_stress * L_Stress (Focal Loss)
+    Combined loss function balancing both tasks simultaneously:
+        Loss = (L_BPM / 10.0) + lambda_stress * L_Stress (Focal Loss)
     """
-    def __init__(self, lambda_stress=10.0, gamma=config.FOCAL_LOSS_GAMMA, alpha=config.FOCAL_LOSS_ALPHA):
+    def __init__(self, lambda_stress=15.0, gamma=config.FOCAL_LOSS_GAMMA, alpha=config.FOCAL_LOSS_ALPHA):
         super().__init__()
         self.lambda_stress = lambda_stress
         self.bpm_criterion = nn.SmoothL1Loss()
@@ -182,7 +220,7 @@ class UBFCMultiTaskLoss(nn.Module):
     def forward(self, pred_bpm, true_bpm, pred_stress, true_stress):
         loss_bpm = self.bpm_criterion(pred_bpm.squeeze(), true_bpm)
         loss_stress = self.stress_criterion(pred_stress, true_stress)
-        total_loss = loss_bpm + (self.lambda_stress * loss_stress)
+        total_loss = (loss_bpm / 10.0) + (self.lambda_stress * loss_stress)
         return total_loss, loss_bpm, loss_stress
 
 

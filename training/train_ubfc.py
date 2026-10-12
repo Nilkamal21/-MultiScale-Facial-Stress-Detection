@@ -22,8 +22,10 @@ cv2.setNumThreads(1)
 cv2.ocl.setUseOpenCL(False)
 
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
+from sklearn.metrics import f1_score, accuracy_score
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
@@ -111,7 +113,7 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
         # Feature 2: CHROM BVP pulse waveform filtered to human heart rate bandwidth (0.7 - 3.5 Hz)
         try:
             bvp = chrom_rppg(win_rgb)
-            bvp_filt = butter_bandpass_filter(bvp, lowcut=config.BANDPASS_LOW_HZ, highcut=config.BANDPASS_HIGH_HZ, fs=config.VIDEO_FPS)
+            bvp_filt = butter_bandpass_filter(bvp, fs=config.VIDEO_FPS, low_hz=config.BANDPASS_LOW_HZ, high_hz=config.BANDPASS_HIGH_HZ)
             bvp_norm = ((bvp_filt - np.mean(bvp_filt)) / (np.std(bvp_filt) + 1e-6)).reshape(-1, 1).astype(np.float32)
         except Exception:
             bvp_norm = np.zeros((window_size, 1), dtype=np.float32)
@@ -122,6 +124,8 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
         # Match with ground truth BPM (mean over the window)
         gt_idx = min(start + window_size // 2, len(true_bpm) - 1)
         curr_bpm = float(true_bpm[gt_idx])
+        if curr_bpm < 40.0 or curr_bpm > 200.0:
+            curr_bpm = float(baseline_bpm)
 
         # Stress Rule: If HR is elevated > 15% above resting baseline, Stress = 1
         is_stressed = 1 if (curr_bpm > baseline_bpm * (1.0 + config.STRESS_ELEVATION_THRESHOLD)) else 0
@@ -238,9 +242,11 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch=1, to
 
 
 def evaluate_model(model, dataloader, criterion, device):
-    """Evaluates model performance on validation or test set with progress bar."""
+    """Evaluates model performance and dynamically calibrates the optimal decision threshold."""
     model.eval()
-    total_loss, total_bpm_err, total_stress_correct, total_samples = 0.0, 0.0, 0, 0
+    total_loss, total_bpm_err = 0.0, 0.0
+    all_true_stress = []
+    all_stress_probs = []
 
     with torch.no_grad():
         pbar = tqdm(dataloader, desc="Evaluating", leave=False)
@@ -257,37 +263,58 @@ def evaluate_model(model, dataloader, criterion, device):
             total_loss += loss.item() * batch_size
             total_bpm_err += torch.sum(torch.abs(pred_bpm.squeeze() - y_bpm)).item()
 
-            preds = torch.argmax(pred_stress, dim=1)
-            total_stress_correct += torch.sum(preds == y_stress).item()
-            total_samples += batch_size
+            probs = F.softmax(pred_stress, dim=1)[:, 1]
+            all_stress_probs.extend(probs.cpu().numpy().tolist())
+            all_true_stress.extend(y_stress.cpu().numpy().tolist())
 
-    avg_loss = total_loss / max(total_samples, 1)
-    mae_bpm = total_bpm_err / max(total_samples, 1)
-    stress_acc = (total_stress_correct / max(total_samples, 1)) * 100.0
-    return avg_loss, mae_bpm, stress_acc
+    n_samples = max(len(all_true_stress), 1)
+    avg_loss = total_loss / n_samples
+    mae_bpm = total_bpm_err / n_samples
+
+    all_true_stress = np.array(all_true_stress, dtype=np.int64)
+    all_stress_probs = np.array(all_stress_probs, dtype=np.float32)
+
+    # Dynamic threshold calibration on validation set
+    best_f1 = 0.0
+    best_threshold = config.STRESS_DECISION_THRESHOLD
+    for t in np.linspace(0.20, 0.80, 31):
+        preds = (all_stress_probs >= t).astype(int)
+        macro_f1 = float(f1_score(all_true_stress, preds, average="macro", zero_division=0))
+        if macro_f1 > best_f1:
+            best_f1 = macro_f1
+            best_threshold = float(t)
+
+    best_preds = (all_stress_probs >= best_threshold).astype(int)
+    stress_acc = float(accuracy_score(all_true_stress, best_preds)) * 100.0
+    macro_f1_pct = float(best_f1) * 100.0
+
+    return avg_loss, mae_bpm, stress_acc, macro_f1_pct, best_threshold
 
 
 def run_training(train_loader, val_loader, epochs=config.EPOCHS, lr=config.LEARNING_RATE, device=None):
-    """Full training pipeline with early stopping and model checkpoint saving."""
+    """Full training pipeline with early stopping, dynamic loss balancing, and threshold calibration."""
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Device] Using: {device}")
 
     # Dynamic class weight calculation to counteract ~6:1 imbalance
-    stress_weights = None
     if hasattr(train_loader.dataset, "y_stress"):
         y_tr = train_loader.dataset.y_stress
         n_rest = float((y_tr == 0).sum())
         n_stress = float((y_tr == 1).sum())
         if n_stress > 0:
             weight_stress = n_rest / n_stress
-            stress_weights = torch.tensor([1.0, weight_stress], dtype=torch.float32, device=device)
             print(f"[Class Balancing] Rest: {int(n_rest)}, Stress: {int(n_stress)} | Weight Ratio: [1.0, {weight_stress:.2f}]")
 
-    model = DualHeadUBFCStressModel(input_dim=config.INPUT_DIM, hidden_dim=config.GRU_HIDDEN_DIM, num_layers=config.GRU_NUM_LAYERS).to(device)
-    criterion = UBFCMultiTaskLoss(lambda_stress=10.0)
+    model = DualHeadUBFCStressModel(
+        input_dim=config.INPUT_DIM,
+        hidden_dim=config.GRU_HIDDEN_DIM,
+        num_layers=config.GRU_NUM_LAYERS
+    ).to(device)
+
+    criterion = UBFCMultiTaskLoss(lambda_stress=15.0)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=config.WEIGHT_DECAY)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
 
     best_val_loss = float("inf")
     save_ckpt = os.path.join(config.CHECKPOINTS_DIR, "best_ubfc_stress_model.pth")
@@ -301,7 +328,7 @@ def run_training(train_loader, val_loader, epochs=config.EPOCHS, lr=config.LEARN
     for epoch in range(1, epochs + 1):
         t0 = time.time()
         train_loss, train_mae, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss, val_mae, val_acc = evaluate_model(model, val_loader, criterion, device)
+        val_loss, val_mae, val_acc, val_f1, val_threshold = evaluate_model(model, val_loader, criterion, device)
         scheduler.step(val_loss)
         duration = time.time() - t0
 
@@ -314,6 +341,8 @@ def run_training(train_loader, val_loader, epochs=config.EPOCHS, lr=config.LEARN
                 "val_loss": val_loss,
                 "val_mae_bpm": val_mae,
                 "val_stress_acc": val_acc,
+                "val_macro_f1": val_f1,
+                "best_threshold": val_threshold,
             }
             torch.save(ckpt_data, save_ckpt)
             local_ckpt = os.path.join(config.CHECKPOINTS_DIR, "best_ubfc_stress_model.pth")
@@ -326,8 +355,8 @@ def run_training(train_loader, val_loader, epochs=config.EPOCHS, lr=config.LEARN
         status_mark = " [*BEST]" if is_best else ""
         print(
             f"Epoch [{epoch:02d}/{epochs:02d}] ({duration:.1f}s) | "
-            f"Train Loss: {train_loss:.3f} (MAE: {train_mae:.1f} BPM, Acc: {train_acc:.1f}%) | "
-            f"Val Loss: {val_loss:.3f} (MAE: {val_mae:.1f} BPM, Acc: {val_acc:.1f}%){status_mark}"
+            f"Train Loss: {train_loss:.3f} (MAE: {train_mae:.1f} BPM) | "
+            f"Val Loss: {val_loss:.3f} (MAE: {val_mae:.1f} BPM, F1: {val_f1:.1f}%, Thr: {val_threshold:.2f}){status_mark}"
         )
 
     print("=" * 65)
