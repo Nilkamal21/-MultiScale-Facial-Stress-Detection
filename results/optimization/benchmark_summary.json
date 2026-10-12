@@ -1,0 +1,62 @@
+{
+  "step": "Step 29: Real-Time Performance & System Profiling",
+  "engine_benchmarks": {
+    "PyTorch_CPU_FP32": {
+      "mean_ms": 25.74,
+      "median_ms": 25.39,
+      "p95_ms": 29.19,
+      "fps": 38.9,
+      "ram_mb": 620.8,
+      "vram_mb": 0.0
+    },
+    "PyTorch_CUDA_FP32": {
+      "mean_ms": 17.43,
+      "median_ms": 15.91,
+      "p95_ms": 24.89,
+      "fps": 57.4,
+      "ram_mb": 1065.2,
+      "vram_mb": 29.7
+    },
+    "PyTorch_CUDA_FP16": {
+      "mean_ms": 16.97,
+      "median_ms": 16.35,
+      "p95_ms": 22.1,
+      "fps": 58.9,
+      "ram_mb": 1402.1,
+      "vram_mb": 19.6
+    },
+    "ONNX_Runtime_CPU_FP32": {
+      "mean_ms": 10.53,
+      "median_ms": 10.08,
+      "p95_ms": 13.53,
+      "fps": 95.0,
+      "ram_mb": 1474.3,
+      "vram_mb": 19.6
+    },
+    "ONNX_Runtime_CPU_INT8": {
+      "mean_ms": 196.35,
+      "median_ms": 191.31,
+      "p95_ms": 229.04,
+      "fps": 5.1,
+      "ram_mb": 1510.5,
+      "vram_mb": 19.6
+    }
+  },
+  "component_breakdown": {
+    "face_detection_mediapipe_ms": 3.22,
+    "face_detection_mtcnn_ms": 3.22,
+    "face_tracking_fast_ms": 0.17,
+    "preprocessing_ms": 1.05,
+    "backbone_feature_extraction_ms": 24.16,
+    "temporal_gru_inference_ms": 2.05,
+    "smoothing_and_hud_rendering_ms": 1.09,
+    "end_to_end_with_mediapipe_ms": 31.57,
+    "fps_with_mediapipe": 31.7,
+    "end_to_end_with_mtcnn_ms": 31.57,
+    "fps_with_mtcnn": 31.7,
+    "end_to_end_with_fast_tracking_ms": 28.52,
+    "fps_with_fast_tracking": 35.1
+  },
+  "comparison_chart": "C:\\Users\\kundu\\OneDrive\\Desktop\\KMU-FED-2\\results\\optimization\\optimization_comparison.png",
+  "status": "SUCCESS"
+}

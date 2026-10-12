@@ -1,0 +1,23 @@
+{
+  "step": "Step 28: INT8 Dynamic Quantization",
+  "affective_backbone": {
+    "fp32_mb": 16.55,
+    "int8_mb": 4.5,
+    "reduction_percent": 72.8,
+    "cosine_similarity": 0.0927,
+    "class_match_percent": 50.0
+  },
+  "temporal_stress_gru": {
+    "fp32_mb": 5.46,
+    "int8_mb": 5.32,
+    "reduction_percent": 2.5,
+    "cosine_similarity": 0.9997,
+    "class_match_percent": 100.0
+  },
+  "total": {
+    "fp32_mb": 22.01,
+    "int8_mb": 9.83,
+    "reduction_percent": 55.3
+  },
+  "status": "SUCCESS"
+}

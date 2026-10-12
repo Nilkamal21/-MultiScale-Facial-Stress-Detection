@@ -1,0 +1,14 @@
+{
+    "include": [
+        "."
+    ],
+    "extraPaths": [
+        "C:\\Users\\kundu\\anaconda3\\Lib\\site-packages",
+        "c:\\Users\\kundu\\OneDrive\\Desktop\\KMU-FED-2"
+    ],
+    "pythonPath": "C:\\Users\\kundu\\anaconda3\\python.exe",
+    "pythonVersion": "3.13",
+    "pythonPlatform": "Windows",
+    "reportMissingImports": "none",
+    "reportMissingModuleSource": "none"
+}

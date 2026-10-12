@@ -1,0 +1,15 @@
+{
+  "sequence_folder": "C:\\Users\\kundu\\OneDrive\\Desktop\\KMU-FED-2\\data\\frames\\02_FE_s01",
+  "total_frames_processed": 20,
+  "average_latency_ms": 20.294539991300553,
+  "average_fps": 49.274336862459535,
+  "peak_stress_probability": 0.528637578090032,
+  "min_stress_probability": 0.021468108519911766,
+  "emotions_detected": [
+    "Happiness",
+    "Neutral",
+    "Surprise"
+  ],
+  "runtime_backend": "ONNX Runtime",
+  "speedup_vs_baseline_ratio": 13.86
+}

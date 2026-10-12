@@ -1,0 +1,14 @@
+{
+  "sequence_folder": "C:\\Users\\kundu\\OneDrive\\Desktop\\KMU-FED-2\\data\\frames\\02_FE_s01",
+  "total_frames_processed": 20,
+  "average_latency_ms": 281.3446283340454,
+  "average_fps": 3.554359668856668,
+  "peak_stress_probability": 0.7469903628031412,
+  "min_stress_probability": 0.06064092988769213,
+  "emotions_detected": [
+    "Happiness",
+    "Neutral",
+    "Surprise"
+  ],
+  "device": "cuda"
+}

@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data & Large checkpoints
+data/
+*.npz
+*.7z
+*.zip
+*.avi
+
+# Environments
+.vscode/
+.idea/
+.venv/
+env/
+venv/
+ENV/
+
+# OS generated
+.DS_Store
+Thumbs.db

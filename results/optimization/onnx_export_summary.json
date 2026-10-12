@@ -1,0 +1,10 @@
+{
+  "step": "Step 27: Model Conversion to ONNX",
+  "affective_backbone_onnx": "C:\\Users\\kundu\\OneDrive\\Desktop\\KMU-FED-2\\models_checkpoints\\onnx\\affective_backbone.onnx",
+  "affective_backbone_size_mb": 16.55,
+  "temporal_stress_onnx": "C:\\Users\\kundu\\OneDrive\\Desktop\\KMU-FED-2\\models_checkpoints\\onnx\\temporal_stress_gru.onnx",
+  "temporal_stress_size_mb": 5.46,
+  "onnx_opset_version": 17,
+  "parity_tolerance_passed": true,
+  "status": "SUCCESS"
+}
