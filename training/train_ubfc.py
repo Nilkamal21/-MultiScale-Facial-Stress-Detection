@@ -28,7 +28,7 @@ from torch.utils.data import DataLoader, TensorDataset
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from tqdm import tqdm
-from preprocessing.rppg_extract import extract_frame_rgb_mean
+from preprocessing.rppg_extract import extract_frame_rgb_mean, chrom_rppg, butter_bandpass_filter
 from datasets.ubfc_dataset import parse_ubfc_ground_truth, find_subject_directories
 from models.ubfc_stress_model import DualHeadUBFCStressModel, UBFCMultiTaskLoss
 
@@ -38,11 +38,10 @@ from models.ubfc_stress_model import DualHeadUBFCStressModel, UBFCMultiTaskLoss
 # ==============================================================================
 def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE, stride=config.WINDOW_STRIDE):
     """
-    Reads a single subject's vid.avi and ground_truth.txt without saving image files to disk!
-    Extracts 100-frame feature sequences, true BPM, and Stress labels.
-
-    Returns:
-        X_windows: np.ndarray of shape (Num_Windows, Window_Size, 3)
+    Reads a single subject's vid.avi and ground_truth.txt.
+    Extracts forehead skin capillary signals and combines them with CHROM pulse waves.
+    Outputs:
+        X_windows: np.ndarray of shape (Num_Windows, 100, 4) -> [R, G, B, BVP_pulse]
         y_bpm: np.ndarray of shape (Num_Windows,)
         y_stress: np.ndarray of shape (Num_Windows,)
     """
@@ -52,16 +51,21 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
 
     frame_rgbs = []
 
-    # 1. Primary method: imageio-ffmpeg (memory-safe pipe, immune to OpenCV C++ double-free)
+    # 1. Primary method: imageio-ffmpeg
     try:
         import imageio.v2 as imageio
         reader = imageio.get_reader(video_path)
         for frame_rgb in reader:
             h, w = frame_rgb.shape[:2]
-            bx, by, bw, bh = int(w * 0.20), int(h * 0.15), int(w * 0.60), int(h * 0.70)
-            crop = frame_rgb[by : by + bh, bx : bx + bw]
-            if crop.size > 0:
-                mean_rgb = np.mean(crop, axis=(0, 1), dtype=np.float32)
+            # Forehead ROI: Upper 12% to 32% of face, center 50% width
+            # Avoids eyes (blinking), mouth (talking), hair, and background noise!
+            fy = int(h * 0.12)
+            fh = max(5, int(h * 0.20))
+            fx = int(w * 0.25)
+            fw = max(5, int(w * 0.50))
+            forehead_crop = frame_rgb[fy : fy + fh, fx : fx + fw]
+            if forehead_crop.size > 0:
+                mean_rgb = np.mean(forehead_crop, axis=(0, 1), dtype=np.float32)
                 frame_rgbs.append(mean_rgb)
         reader.close()
     except Exception as e_im:
@@ -73,11 +77,14 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
                 if not ret or frame_bgr is None or frame_bgr.size == 0:
                     break
                 h, w = frame_bgr.shape[:2]
-                bx, by, bw, bh = int(w * 0.20), int(h * 0.15), int(w * 0.60), int(h * 0.70)
-                crop_bgr = frame_bgr[by : by + bh, bx : bx + bw]
-                if crop_bgr.size > 0:
-                    crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-                    mean_rgb = np.mean(crop_rgb, axis=(0, 1), dtype=np.float32)
+                fy = int(h * 0.12)
+                fh = max(5, int(h * 0.20))
+                fx = int(w * 0.25)
+                fw = max(5, int(w * 0.50))
+                forehead_bgr = frame_bgr[fy : fy + fh, fx : fx + fw]
+                if forehead_bgr.size > 0:
+                    forehead_rgb = cv2.cvtColor(forehead_bgr, cv2.COLOR_BGR2RGB)
+                    mean_rgb = np.mean(forehead_rgb, axis=(0, 1), dtype=np.float32)
                     frame_rgbs.append(mean_rgb)
             cap.release()
         except Exception:
@@ -96,7 +103,21 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
 
     start = 0
     while start + window_size <= num_frames:
-        win_x = frame_rgbs[start : start + window_size]  # (100, 3)
+        win_rgb = frame_rgbs[start : start + window_size]  # (100, 3)
+
+        # Feature 1: Z-score normalized RGB channels (removes skin tone baseline offset)
+        win_norm = (win_rgb - np.mean(win_rgb, axis=0, keepdims=True)) / (np.std(win_rgb, axis=0, keepdims=True) + 1e-6)
+
+        # Feature 2: CHROM BVP pulse waveform filtered to human heart rate bandwidth (0.7 - 3.5 Hz)
+        try:
+            bvp = chrom_rppg(win_rgb)
+            bvp_filt = butter_bandpass_filter(bvp, lowcut=config.BANDPASS_LOW_HZ, highcut=config.BANDPASS_HIGH_HZ, fs=config.VIDEO_FPS)
+            bvp_norm = ((bvp_filt - np.mean(bvp_filt)) / (np.std(bvp_filt) + 1e-6)).reshape(-1, 1).astype(np.float32)
+        except Exception:
+            bvp_norm = np.zeros((window_size, 1), dtype=np.float32)
+
+        # Combine into 4-channel input: [R_norm, G_norm, B_norm, BVP_pulse]
+        win_4ch = np.concatenate([win_norm, bvp_norm], axis=-1).astype(np.float32)  # (100, 4)
 
         # Match with ground truth BPM (mean over the window)
         gt_idx = min(start + window_size // 2, len(true_bpm) - 1)
@@ -105,7 +126,7 @@ def extract_subject_features(video_path, gt_path, window_size=config.WINDOW_SIZE
         # Stress Rule: If HR is elevated > 15% above resting baseline, Stress = 1
         is_stressed = 1 if (curr_bpm > baseline_bpm * (1.0 + config.STRESS_ELEVATION_THRESHOLD)) else 0
 
-        windows_X.append(win_x)
+        windows_X.append(win_4ch)
         windows_bpm.append(curr_bpm)
         windows_stress.append(is_stressed)
 
@@ -261,8 +282,8 @@ def run_training(train_loader, val_loader, epochs=config.EPOCHS, lr=config.LEARN
             stress_weights = torch.tensor([1.0, weight_stress], dtype=torch.float32, device=device)
             print(f"[Class Balancing] Rest: {int(n_rest)}, Stress: {int(n_stress)} | Weight Ratio: [1.0, {weight_stress:.2f}]")
 
-    model = DualHeadUBFCStressModel(input_dim=3, hidden_dim=config.GRU_HIDDEN_DIM, num_layers=config.GRU_NUM_LAYERS).to(device)
-    criterion = UBFCMultiTaskLoss(lambda_stress=10.0, stress_weights=stress_weights)
+    model = DualHeadUBFCStressModel(input_dim=config.INPUT_DIM, hidden_dim=config.GRU_HIDDEN_DIM, num_layers=config.GRU_NUM_LAYERS).to(device)
+    criterion = UBFCMultiTaskLoss(lambda_stress=10.0)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=config.WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2)
 
@@ -320,11 +341,11 @@ if __name__ == "__main__":
         print("=" * 60)
 
         # Create synthetic train and validation datasets to test training loop end-to-end
-        synth_X_train = torch.randn(32, 100, 3)
+        synth_X_train = torch.randn(32, 100, config.INPUT_DIM)
         synth_y_bpm_train = torch.empty(32).uniform_(60, 110)
         synth_y_stress_train = torch.randint(0, 2, (32,))
 
-        synth_X_val = torch.randn(8, 100, 3)
+        synth_X_val = torch.randn(8, 100, config.INPUT_DIM)
         synth_y_bpm_val = torch.empty(8).uniform_(60, 110)
         synth_y_stress_val = torch.randint(0, 2, (8,))
 

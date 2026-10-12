@@ -31,7 +31,7 @@ import config
 from models.ubfc_stress_model import DualHeadUBFCStressModel
 
 
-def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_dir=None):
+def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_dir=None, stress_threshold=config.STRESS_DECISION_THRESHOLD):
     """
     Evaluates a saved checkpoint on the provided test DataLoader.
     
@@ -40,6 +40,7 @@ def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_
         test_loader: PyTorch DataLoader yielding (X, y_bpm, y_stress).
         device: torch.device.
         results_dir: Folder to save plots and evaluation metrics.
+        stress_threshold: Probability threshold for positive stress detection (default: 0.55).
     
     Returns:
         metrics: dict of computed regression and classification metrics.
@@ -58,12 +59,13 @@ def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_
     os.makedirs(results_dir, exist_ok=True)
 
     print(f"[Evaluation] Loading model weights from: {model_path}")
+    print(f"[Evaluation] Calibrated Stress Decision Threshold: {stress_threshold:.2f}")
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Checkpoint not found at: {model_path}")
 
     # Initialize model architecture and load weights
     model = DualHeadUBFCStressModel(
-        input_dim=3,
+        input_dim=config.INPUT_DIM,
         hidden_dim=config.GRU_HIDDEN_DIM,
         num_layers=config.GRU_NUM_LAYERS
     ).to(device)
@@ -94,7 +96,9 @@ def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_
             all_pred_bpm.extend(pred_bpm.squeeze().cpu().numpy().tolist())
             all_true_stress.extend(y_stress.cpu().numpy().tolist())
             
-            pred_classes = torch.argmax(pred_stress_logits, dim=1)
+            # Calibrated probability decision threshold
+            probs = torch.softmax(pred_stress_logits, dim=1)
+            pred_classes = (probs[:, 1] >= stress_threshold).long()
             all_pred_stress.extend(pred_classes.cpu().numpy().tolist())
 
     all_true_bpm = np.array(all_true_bpm, dtype=np.float32)
@@ -194,6 +198,7 @@ if __name__ == "__main__":
     parser.add_argument("--mode", type=str, default="diagnostic", choices=["diagnostic", "eval"])
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--split", type=str, default="test", choices=["train", "val", "test"])
+    parser.add_argument("--threshold", type=float, default=config.STRESS_DECISION_THRESHOLD)
     args = parser.parse_args()
 
     if args.mode == "diagnostic":
@@ -201,16 +206,16 @@ if __name__ == "__main__":
         print("  Evaluating Synthetic Test Batch (Diagnostic Mode)")
         print("=" * 60)
         
-        synth_X = torch.randn(32, 100, 3)
+        synth_X = torch.randn(32, 100, config.INPUT_DIM)
         synth_bpm = torch.empty(32).uniform_(60, 110)
         synth_stress = torch.randint(0, 2, (32,))
         test_ds = TensorDataset(synth_X, synth_bpm, synth_stress)
         test_loader = DataLoader(test_ds, batch_size=8, shuffle=False)
 
-        metrics = evaluate_checkpoint(model_path=args.checkpoint, test_loader=test_loader)
+        metrics = evaluate_checkpoint(model_path=args.checkpoint, test_loader=test_loader, stress_threshold=args.threshold)
         print("  [SUCCESS] Diagnostic evaluation finished cleanly!")
 
     elif args.mode == "eval":
         from datasets.ubfc_dataset import get_ubfc_dataloader
         test_loader = get_ubfc_dataloader(split=args.split, shuffle=False)
-        evaluate_checkpoint(model_path=args.checkpoint, test_loader=test_loader)
+        evaluate_checkpoint(model_path=args.checkpoint, test_loader=test_loader, stress_threshold=args.threshold)

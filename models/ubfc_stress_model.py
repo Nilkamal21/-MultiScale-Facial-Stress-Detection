@@ -66,7 +66,7 @@ class DualHeadUBFCStressModel(nn.Module):
     """
     def __init__(
         self,
-        input_dim=3,                      # 3 for spatial RGB pulse wave, or 64 for deep embeddings
+        input_dim=config.INPUT_DIM,        # 4 for [R, G, B, BVP_pulse]
         hidden_dim=config.GRU_HIDDEN_DIM,  # 64 units per direction (128 total)
         num_layers=config.GRU_NUM_LAYERS,  # 2 stacked recurrent layers
         dropout=config.DROPOUT_RATE        # 0.3 dropout to prevent overfitting
@@ -146,19 +146,38 @@ class DualHeadUBFCStressModel(nn.Module):
         return pred_bpm, stress_logits, attn_weights
 
 
+class FocalLoss(nn.Module):
+    """
+    Focal Loss (Lin et al., ICCV 2017) for imbalanced stress classification.
+    Dynamically down-weights easy, well-classified resting samples:
+        FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+    """
+    def __init__(self, gamma=config.FOCAL_LOSS_GAMMA, alpha=config.FOCAL_LOSS_ALPHA):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+
+    def forward(self, inputs, targets):
+        ce_loss = nn.functional.cross_entropy(inputs, targets, reduction="none")
+        pt = torch.exp(-ce_loss)
+        alpha_t = torch.where(targets == 1, self.alpha, 1.0 - self.alpha)
+        focal_loss = alpha_t * ((1.0 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
+
+
 # ==============================================================================
 # 3. COMBINED MULTI-TASK LOSS FUNCTION
 # ==============================================================================
 class UBFCMultiTaskLoss(nn.Module):
     """
     Combined loss function optimizing both tasks simultaneously:
-        Loss = L_BPM (Smooth L1 Loss) + lambda_stress * L_Stress (Weighted Cross Entropy Loss)
+        Loss = L_BPM (Smooth L1 Loss) + lambda_stress * L_Stress (Focal Loss)
     """
-    def __init__(self, lambda_stress=10.0, stress_weights=None):
+    def __init__(self, lambda_stress=10.0, gamma=config.FOCAL_LOSS_GAMMA, alpha=config.FOCAL_LOSS_ALPHA):
         super().__init__()
         self.lambda_stress = lambda_stress
         self.bpm_criterion = nn.SmoothL1Loss()
-        self.stress_criterion = nn.CrossEntropyLoss(weight=stress_weights)
+        self.stress_criterion = FocalLoss(gamma=gamma, alpha=alpha)
 
     def forward(self, pred_bpm, true_bpm, pred_stress, true_stress):
         loss_bpm = self.bpm_criterion(pred_bpm.squeeze(), true_bpm)
