@@ -111,10 +111,12 @@ class DualHeadUBFCStressModel(nn.Module):
             nn.ReLU(),
             nn.Linear(32, 1)
         )
+        # Initialize output bias to average human heart rate (~80 BPM)
+        nn.init.constant_(self.hr_head[-1].bias, 80.0)
 
-        # 6. Output Head 2: Stress Classification Head (0 = Calm, 1 = High Stress)
+        # 6. Output Head 2: Stress Classification Head (Conditioned on features + predicted BPM)
         self.stress_head = nn.Sequential(
-            nn.Linear(64, 32),
+            nn.Linear(65, 32),
             nn.ReLU(),
             nn.Linear(32, 2)
         )
@@ -137,8 +139,9 @@ class DualHeadUBFCStressModel(nn.Module):
         # Head 1: Predict Heart Rate BPM
         pred_bpm = self.hr_head(features)  # (Batch, 1)
 
-        # Head 2: Predict Stress Logits
-        stress_logits = self.stress_head(features)  # (Batch, 2)
+        # Head 2: Predict Stress Logits (conditioned on features + normalized BPM)
+        stress_in = torch.cat([features, pred_bpm / 100.0], dim=-1)  # (Batch, 65)
+        stress_logits = self.stress_head(stress_in)  # (Batch, 2)
 
         return pred_bpm, stress_logits, attn_weights
 
@@ -149,13 +152,13 @@ class DualHeadUBFCStressModel(nn.Module):
 class UBFCMultiTaskLoss(nn.Module):
     """
     Combined loss function optimizing both tasks simultaneously:
-        Loss = L_BPM (Smooth L1 Loss) + lambda_stress * L_Stress (Cross Entropy Loss)
+        Loss = L_BPM (Smooth L1 Loss) + lambda_stress * L_Stress (Weighted Cross Entropy Loss)
     """
-    def __init__(self, lambda_stress=1.0):
+    def __init__(self, lambda_stress=10.0, stress_weights=None):
         super().__init__()
         self.lambda_stress = lambda_stress
         self.bpm_criterion = nn.SmoothL1Loss()
-        self.stress_criterion = nn.CrossEntropyLoss()
+        self.stress_criterion = nn.CrossEntropyLoss(weight=stress_weights)
 
     def forward(self, pred_bpm, true_bpm, pred_stress, true_stress):
         loss_bpm = self.bpm_criterion(pred_bpm.squeeze(), true_bpm)

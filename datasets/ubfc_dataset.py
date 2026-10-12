@@ -166,7 +166,13 @@ class UBFCCachedDataset(Dataset):
         return len(self.X)
 
     def __getitem__(self, idx):
-        return self.X[idx], self.y_bpm[idx], self.y_stress[idx]
+        x = self.X[idx]  # (100, 3)
+        # Temporal Z-score normalization per channel across the 100 frames
+        # Eliminates static skin tone & lighting DC offsets, isolating pure BVP pulse oscillations
+        mean = torch.mean(x, dim=0, keepdim=True)
+        std = torch.std(x, dim=0, keepdim=True) + 1e-6
+        x_norm = (x - mean) / std
+        return x_norm, self.y_bpm[idx], self.y_stress[idx]
 
 
 # ==============================================================================

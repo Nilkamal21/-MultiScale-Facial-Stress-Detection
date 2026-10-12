@@ -115,7 +115,8 @@ def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_
 
     # 2. Stress Detection Metrics
     acc = float(accuracy_score(all_true_stress, all_pred_stress)) * 100.0
-    prec, rec, f1, _ = precision_recall_fscore_support(all_true_stress, all_pred_stress, average="macro", zero_division=0)
+    prec_macro, rec_macro, f1_macro, _ = precision_recall_fscore_support(all_true_stress, all_pred_stress, average="macro", zero_division=0)
+    prec_per, rec_per, f1_per, _ = precision_recall_fscore_support(all_true_stress, all_pred_stress, average=None, zero_division=0)
     cm = confusion_matrix(all_true_stress, all_pred_stress)
 
     # Print Formatted Evaluation Report
@@ -129,10 +130,11 @@ def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_
     print(f"  • Mean Bias (Pred - True)       : {mean_bias:+.2f} BPM")
     print("-" * 65)
     print("--- 2. STRESS DETECTION (CLASSIFICATION) METRICS ---")
-    print(f"  • Accuracy                      : {acc:.2f}%")
-    print(f"  • Precision (Macro)             : {prec * 100.0:.2f}%")
-    print(f"  • Recall (Macro)                : {rec * 100.0:.2f}%")
-    print(f"  • F1-Score (Macro)              : {f1 * 100.0:.2f}%")
+    print(f"  • Overall Accuracy              : {acc:.2f}%")
+    print(f"  • Macro F1-Score                : {f1_macro * 100.0:.2f}%")
+    if len(prec_per) > 1:
+        print(f"  • Rest (0)   -> Prec: {prec_per[0] * 100.0:.1f}%, Rec: {rec_per[0] * 100.0:.1f}%, F1: {f1_per[0] * 100.0:.1f}%")
+        print(f"  • Stress (1) -> Prec: {prec_per[1] * 100.0:.1f}%, Rec: {rec_per[1] * 100.0:.1f}%, F1: {f1_per[1] * 100.0:.1f}%")
     print("  • Confusion Matrix [ [TN, FP], [FN, TP] ]:")
     print(f"    {cm.tolist()}")
     print("=" * 65)
@@ -181,7 +183,7 @@ def evaluate_checkpoint(model_path=None, test_loader=None, device=None, results_
         "pearson_r": pearson_r,
         "mean_bias": mean_bias,
         "stress_accuracy": acc,
-        "stress_f1": f1 * 100.0,
+        "stress_f1": f1_macro * 100.0,
         "confusion_matrix": cm.tolist()
     }
     return metrics

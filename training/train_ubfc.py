@@ -191,6 +191,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch=1, to
 
         loss, loss_bpm, loss_stress = criterion(pred_bpm, y_bpm, pred_stress, y_stress)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         batch_size = X.size(0)
@@ -249,8 +250,19 @@ def run_training(train_loader, val_loader, epochs=config.EPOCHS, lr=config.LEARN
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Device] Using: {device}")
 
+    # Dynamic class weight calculation to counteract ~6:1 imbalance
+    stress_weights = None
+    if hasattr(train_loader.dataset, "y_stress"):
+        y_tr = train_loader.dataset.y_stress
+        n_rest = float((y_tr == 0).sum())
+        n_stress = float((y_tr == 1).sum())
+        if n_stress > 0:
+            weight_stress = n_rest / n_stress
+            stress_weights = torch.tensor([1.0, weight_stress], dtype=torch.float32, device=device)
+            print(f"[Class Balancing] Rest: {int(n_rest)}, Stress: {int(n_stress)} | Weight Ratio: [1.0, {weight_stress:.2f}]")
+
     model = DualHeadUBFCStressModel(input_dim=3, hidden_dim=config.GRU_HIDDEN_DIM, num_layers=config.GRU_NUM_LAYERS).to(device)
-    criterion = UBFCMultiTaskLoss(lambda_stress=1.0)
+    criterion = UBFCMultiTaskLoss(lambda_stress=10.0, stress_weights=stress_weights)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=config.WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2)
 
