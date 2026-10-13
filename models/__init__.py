@@ -1,12 +1,17 @@
 """
 models package initialization.
-Contains the Dual-Head BiGRU model and Temporal Attention for UBFC stress detection.
 """
 
-from .ubfc_stress_model import DualHeadUBFCStressModel, TemporalAttention, UBFCMultiTaskLoss
+from .efficientnet_encoder import EfficientNetEncoder
+from .simclr_model import SimCLRModel, NTXentLoss
+from .emotion_classifier import EmotionClassifier, EndToEndEmotionModel
+from .temporal_model import TemporalStressGRU
 
 __all__ = [
-    "DualHeadUBFCStressModel",
-    "TemporalAttention",
-    "UBFCMultiTaskLoss",
+    "EfficientNetEncoder",
+    "SimCLRModel",
+    "NTXentLoss",
+    "EmotionClassifier",
+    "EndToEndEmotionModel",
+    "TemporalStressGRU",
 ]

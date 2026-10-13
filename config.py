@@ -1,91 +1,153 @@
 """
-config.py — Central Configuration for UBFC Cardiovascular Stress & Pulse System.
-Contains all paths, hyperparameters, and biomedical signal settings.
-Works seamlessly both on local machines and inside Kaggle notebooks.
+config.py — Central configuration for the KMU-FED pipeline.
+All paths, constants, and hyperparameters live here.
 """
 
 import os
 
-# ==============================================================================
-# 1. DYNAMIC PATH CONFIGURATION (No hardcoding - works on any computer or cloud)
-# ==============================================================================
+# --- Reproducibility ---
+RANDOM_SEED = 42
+
+# --- Project root (Dynamic, works on any computer or Kaggle) ---
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+RAW_DATA_DIR = os.path.join(PROJECT_ROOT, "data", "KMU-FED")
 
-# Local directories
+# --- Intermediate output directories ---
 DATA_DIR            = os.path.join(PROJECT_ROOT, "data")
-CHECKPOINTS_DIR     = os.path.join(PROJECT_ROOT, "models_checkpoints")
-RESULTS_DIR         = os.path.join(PROJECT_ROOT, "results")
-LOGS_DIR            = os.path.join(PROJECT_ROOT, "logs")
+FRAMES_DIR          = os.path.join(DATA_DIR, "frames")
+DETECTED_FACES_DIR  = os.path.join(DATA_DIR, "detected_faces")
+ALIGNED_FACES_DIR   = os.path.join(DATA_DIR, "aligned_faces")
+PROCESSED_DIR       = os.path.join(DATA_DIR, "processed")
 
-# Kaggle dataset path (used when running inside a Kaggle notebook)
-KAGGLE_INPUT_DIR    = "/kaggle/input/ubfc-rppg-dataset"
-KAGGLE_WORKING_DIR  = "/kaggle/working"
+# --- Metadata ---
+METADATA_DIR        = os.path.join(PROJECT_ROOT, "data", "metadata")
+METADATA_CSV        = os.path.join(METADATA_DIR, "kmu_fed_metadata.csv")
+STATISTICS_REPORT   = os.path.join(METADATA_DIR, "dataset_statistics_report.txt")
+TRAIN_CSV           = os.path.join(METADATA_DIR, "train.csv")
+VAL_CSV             = os.path.join(METADATA_DIR, "val.csv")
+TEST_CSV            = os.path.join(METADATA_DIR, "test.csv")
 
-# Check if running in Kaggle environment or locally
-IS_KAGGLE = os.path.exists("/kaggle")
-UBFC_RAW_DIR = KAGGLE_INPUT_DIR if os.path.exists(KAGGLE_INPUT_DIR) else os.path.join(DATA_DIR, "ubfc_raw")
+# --- Logs ---
+LOGS_DIR                    = os.path.join(PROJECT_ROOT, "logs")
+FACE_DETECTION_FAILURES_CSV = os.path.join(LOGS_DIR, "face_detection_failures.csv")
+ALIGNMENT_FAILURES_CSV      = os.path.join(LOGS_DIR, "alignment_failures.csv")
 
-# Ensure local directories exist
-for folder in [DATA_DIR, CHECKPOINTS_DIR, RESULTS_DIR, LOGS_DIR]:
-    os.makedirs(folder, exist_ok=True)
+# --- Features and checkpoints ---
+FEATURES_DIR    = os.path.join(PROJECT_ROOT, "features")
+CHECKPOINTS_DIR = os.path.join(PROJECT_ROOT, "models_checkpoints")
 
-# ==============================================================================
-# 2. MEDIAPIPE FACE DETECTION SETTINGS
-# ==============================================================================
-MEDIAPIPE_MODEL_PATH = os.path.join(CHECKPOINTS_DIR, "blaze_face_short_range.tflite")
+# --- Face Detection (MediaPipe BlazeFace) ---
+MEDIAPIPE_MODEL_PATH     = os.path.join(CHECKPOINTS_DIR, "blaze_face_short_range.tflite")
 MEDIAPIPE_MIN_CONFIDENCE = 0.50
 
-# ==============================================================================
-# 3. VIDEO & TEMPORAL WINDOW SETTINGS
-# ==============================================================================
-VIDEO_FPS          = 30          # UBFC webcam framerate is 30 frames per second
-WINDOW_SIZE        = 100         # Slices video into 100-frame windows (~3.33 seconds)
-WINDOW_STRIDE      = 30          # Slides window forward by 30 frames (1.0 second stride)
-FACE_CROP_SIZE     = 224         # Standardized square face crop (224x224 pixels)
-FACE_MARGIN_RATIO  = 0.10        # 10% padding margin around detected face box
+# --- Results ---
+RESULTS_DIR     = os.path.join(PROJECT_ROOT, "results")
+RESULTS_KMU_FED = os.path.join(RESULTS_DIR, "kmu_fed")
+RESULTS_RAF_DB  = os.path.join(RESULTS_DIR, "raf_db")
+
+# --- Filename convention: {SubjectID}_{EmotionCode}_{PersonCode}_{FrameNumber}.jpg ---
+EMOTION_CODE_MAP = {
+    "AN": "Anger",
+    "DI": "Disgust",
+    "FE": "Fear",
+    "HA": "Happiness",
+    "SA": "Sadness",
+    "SU": "Surprise",
+}
+
+# Files starting with this prefix are byte-for-byte duplicates of 01_AN_mr_* (Kaggle artifact)
+DUPLICATE_PREFIX_EXCLUDE = "1_AN_mr_"
+
+# --- EfficientNet input ---
+EFFICIENTNET_VARIANT = "efficientnet_b0"
+INPUT_SIZE           = 224
+IMAGE_CHANNELS       = 3
+IMAGENET_MEAN        = [0.485, 0.456, 0.406]
+IMAGENET_STD         = [0.229, 0.224, 0.225]
+
+# --- Augmentation (see explainable.md for descriptions) ---
+AUG_HORIZONTAL_FLIP_PROB   = 0.5
+AUG_ROTATION_DEGREES       = 10
+AUG_RANDOM_CROP_SCALE      = (0.85, 1.0)
+AUG_BRIGHTNESS_FACTOR      = 0.2
+AUG_CONTRAST_FACTOR        = 0.2
+AUG_GAUSSIAN_BLUR_ENABLED  = True
+AUG_GAUSSIAN_BLUR_KERNEL   = (5, 5)
+AUG_GAUSSIAN_BLUR_SIGMA    = (0.1, 2.0)
+AUG_GAUSSIAN_BLUR_PROB     = 0.3
+AUG_GAUSSIAN_NOISE_ENABLED = True
+AUG_GAUSSIAN_NOISE_STD     = 0.02
+AUG_GAUSSIAN_NOISE_PROB    = 0.3
+
+# --- Subject-wise split ratios (must sum to 1.0) ---
+TRAIN_RATIO = 0.70
+VAL_RATIO   = 0.15
+TEST_RATIO  = 0.15
+
+# --- Contrastive learning ---
+CONTRASTIVE_LOSS_TYPE   = "contrastive"   # "contrastive" or "ntxent"
+CONTRASTIVE_MARGIN      = 1.0
+CONTRASTIVE_TEMPERATURE = 0.07
+CONTRASTIVE_BATCH_SIZE  = 32
+CONTRASTIVE_EPOCHS      = 50
+CONTRASTIVE_LR          = 1e-4
+PROJECTION_HEAD_DIM     = 128
+FREEZE_BACKBONE         = True
+
+# --- Classifier ---
+CLASSIFIER_HIDDEN_DIM   = 256
+CLASSIFIER_DROPOUT      = 0.4
+CLASSIFIER_BATCH_SIZE   = 32
+STAGE_A_EPOCHS          = 20
+STAGE_A_LR              = 1e-3
+STAGE_B_EPOCHS          = 20
+STAGE_B_LR              = 1e-5
+STAGE_B_UNFREEZE_LAYERS = 3
+
+# --- Evaluation and visualization ---
+EVAL_METRICS        = ["accuracy", "precision", "recall", "f1"]
+VIZ_TSNE_PERPLEXITY = 30
+VIZ_TSNE_N_ITER     = 1000
+VIZ_PCA_COMPONENTS  = 50
+VIZ_UMAP_ENABLED    = False
 
 # ==============================================================================
-# 4. BIOMEDICAL PULSE (rPPG) FILTERING SETTINGS
+# UBFC CARDIOVASCULAR STRESS & HEART RATE CONFIGURATION
 # ==============================================================================
-# Human heart rate typically ranges between 42 BPM and 210 BPM.
-# 42 BPM / 60 = 0.70 Hz
-# 210 BPM / 60 = 3.50 Hz
-BANDPASS_LOW_HZ    = 0.70        # Lower frequency bound (42 BPM)
-BANDPASS_HIGH_HZ   = 3.50        # Upper frequency bound (210 BPM)
-BUTTERWORTH_ORDER  = 4           # Filter sharpness order
+KAGGLE_INPUT_DIR    = "/kaggle/input/ubfc-rppg-dataset"
+KAGGLE_WORKING_DIR  = "/kaggle/working"
+IS_KAGGLE           = os.path.exists("/kaggle")
+UBFC_RAW_DIR        = KAGGLE_INPUT_DIR if os.path.exists(KAGGLE_INPUT_DIR) else os.path.join(DATA_DIR, "ubfc_raw")
 
-# ==============================================================================
-# 5. SUBJECT-INDEPENDENT DATA SPLITS (Total 42 Subjects)
-# ==============================================================================
-# Zero data leakage: Test subjects are complete strangers to the training set!
+VIDEO_FPS          = 30
+WINDOW_SIZE        = 100
+WINDOW_STRIDE      = 30
+FACE_CROP_SIZE     = 224
+FACE_MARGIN_RATIO  = 0.10
+
+BANDPASS_LOW_HZ    = 0.70
+BANDPASS_HIGH_HZ   = 3.50
+BUTTERWORTH_ORDER  = 4
+
 TOTAL_SUBJECTS = 42
-TRAIN_SUBJECTS = [f"subject{i}" for i in range(1, 33)]    # 32 People (76%)
-VAL_SUBJECTS   = [f"subject{i}" for i in range(33, 38)]   # 5 People (12%)
-TEST_SUBJECTS  = [f"subject{i}" for i in range(38, 43)]   # 5 People (12%)
+TRAIN_SUBJECTS = [f"subject{i}" for i in range(1, 33)]
+VAL_SUBJECTS   = [f"subject{i}" for i in range(33, 38)]
+TEST_SUBJECTS  = [f"subject{i}" for i in range(38, 43)]
 
-# ==============================================================================
-# 6. NEURAL NETWORK & TRAINING HYPERPARAMETERS
-# ==============================================================================
-RANDOM_SEED        = 42
-BATCH_SIZE         = 16          # Mini-batch size
-LEARNING_RATE      = 1e-3        # AdamW learning rate
-WEIGHT_DECAY       = 1e-4        # L2 Regularization
-EPOCHS             = 20          # Maximum training epochs
-EARLY_STOP_PATIENCE = 5          # Stop training if validation loss plateaus for 5 epochs
+BATCH_SIZE         = 16
+LEARNING_RATE      = 1e-3
+WEIGHT_DECAY       = 1e-4
+EPOCHS             = 20
+EARLY_STOP_PATIENCE = 5
 
-# BiGRU Architecture settings
-INPUT_DIM          = 4           # Normalized R, G, B + Filtered CHROM BVP pulse wave
-INPUT_FEATURE_DIM  = 64          # Spatial feature embedding dimension per frame
-GRU_HIDDEN_DIM     = 64          # Hidden units per GRU direction (x2 for Bidirectional = 128)
-GRU_NUM_LAYERS     = 2           # Number of stacked GRU layers
-DROPOUT_RATE       = 0.3         # Dropout probability to prevent overfitting
+INPUT_DIM          = 4
+INPUT_FEATURE_DIM  = 64
+GRU_HIDDEN_DIM     = 64
+GRU_NUM_LAYERS     = 2
+DROPOUT_RATE       = 0.3
 
-# ==============================================================================
-# 7. STRESS THRESHOLDS & FOCAL LOSS SETTINGS
-# ==============================================================================
-# In UBFC, Task 2 involves a time-pressured math quiz that spikes heart rate.
-# A heart rate jump > 15% above resting baseline indicates acute mental stress.
 STRESS_ELEVATION_THRESHOLD = 0.15
-STRESS_DECISION_THRESHOLD  = 0.45 # Calibrated probability threshold for stress classification
-FOCAL_LOSS_GAMMA           = 2.0  # Focusing parameter for hard boundary examples
-FOCAL_LOSS_ALPHA           = 0.80 # Minority stress class scaling (penalizes false negatives 4x more than false positives)
+STRESS_DECISION_THRESHOLD  = 0.48
+FOCAL_LOSS_GAMMA           = 2.0
+FOCAL_LOSS_ALPHA           = 0.80
+

@@ -1,8 +1,17 @@
 {
-    "python.defaultInterpreterPath": "C:\\Users\\adhik\\AppData\\Local\\Programs\\Python\\Python310\\python.exe",
+    "python.defaultInterpreterPath": "C:\\Users\\kundu\\anaconda3\\python.exe",
+    "python.pythonPath": "C:\\Users\\kundu\\anaconda3\\python.exe",
+    "python.analysis.extraPaths": [
+        "C:\\Users\\kundu\\anaconda3\\Lib\\site-packages",
+        "c:\\Users\\kundu\\OneDrive\\Desktop\\KMU-FED-2"
+    ],
+    "python.autoComplete.extraPaths": [
+        "C:\\Users\\kundu\\anaconda3\\Lib\\site-packages",
+        "c:\\Users\\kundu\\OneDrive\\Desktop\\KMU-FED-2"
+    ],
     "python.analysis.diagnosticSeverityOverrides": {
         "reportMissingImports": "none",
-        "reportMissingModuleSource": "none",
-        "reportGeneralTypeIssues": "none"
+        "reportMissingModuleSource": "none"
     }
 }
+

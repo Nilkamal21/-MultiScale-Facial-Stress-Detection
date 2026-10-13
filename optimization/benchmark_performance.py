@@ -162,20 +162,23 @@ def run_multi_engine_benchmarks():
     tp_int8 = os.path.join(ONNX_DIR, "temporal_stress_gru_int8.onnx")
     if os.path.exists(bb_int8) and os.path.exists(tp_int8):
         print("[Benchmarking] ONNX Runtime INT8 Quantized (CPU)...")
-        sess_bb_int8 = ort.InferenceSession(bb_int8, providers=["CPUExecutionProvider"])
-        sess_tp_int8 = ort.InferenceSession(tp_int8, providers=["CPUExecutionProvider"])
+        try:
+            sess_bb_int8 = ort.InferenceSession(bb_int8, providers=["CPUExecutionProvider"])
+            sess_tp_int8 = ort.InferenceSession(tp_int8, providers=["CPUExecutionProvider"])
 
-        def run_ort_int8():
-            out_bb = sess_bb_int8.run(None, {"input_face": dummy_face_np})
-            out_tp = sess_tp_int8.run(None, {"feature_sequence": dummy_seq_np})
-            return out_tp
+            def run_ort_int8():
+                out_bb = sess_bb_int8.run(None, {"input_face": dummy_face_np})
+                out_tp = sess_tp_int8.run(None, {"feature_sequence": dummy_seq_np})
+                return out_tp
 
-        res_ort_int8 = benchmark_engine(run_ort_int8)
-        ram, vram = get_current_memory()
-        res_ort_int8["ram_mb"] = round(ram, 1)
-        res_ort_int8["vram_mb"] = round(vram, 1)
-        results["ONNX_Runtime_CPU_INT8"] = res_ort_int8
-        print(f"  -> Mean: {res_ort_int8['mean_ms']} ms | Throughput: {res_ort_int8['fps']} FPS | RAM: {ram:.1f} MB")
+            res_ort_int8 = benchmark_engine(run_ort_int8)
+            ram, vram = get_current_memory()
+            res_ort_int8["ram_mb"] = round(ram, 1)
+            res_ort_int8["vram_mb"] = round(vram, 1)
+            results["ONNX_Runtime_CPU_INT8"] = res_ort_int8
+            print(f"  -> Mean: {res_ort_int8['mean_ms']} ms | Throughput: {res_ort_int8['fps']} FPS | RAM: {ram:.1f} MB")
+        except Exception as e:
+            print(f"  -> [Skipped INT8] Operator not supported on this platform: {e}")
 
     return results
 
