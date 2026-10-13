@@ -357,23 +357,23 @@ def run_sequence_demo(sequence_folder=None):
     return summary
 
 
-def run_webcam_mode():
+def run_webcam_mode(cam_id=0):
     """Runs live real-time webcam inference with interactive HUD window."""
     pipeline = RealtimeTemporalStressPipeline(window_size=10, smooth_k=3)
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(cam_id)
 
     if not cap.isOpened():
-        print("[ERROR] Could not open webcam (device 0). Please check camera connection.")
+        print(f"[ERROR] Could not open webcam (device {cam_id}). Please check camera connection.")
         return
 
-    print("[Webcam Mode] Press 'q' or 'ESC' to exit...")
+    print(f"[Webcam Mode] Stream active on device {cam_id}. Press 'q' or 'ESC' to exit...")
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
         annotated, info = pipeline.process_frame(frame)
-        cv2.imshow("KMU-FED Phase 4: Real-Time Temporal Stress Monitor", annotated)
+        cv2.imshow("Affective Temporal Stress Monitor", annotated)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q') or key == 27:
@@ -385,11 +385,11 @@ def run_webcam_mode():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 4: Real-Time Temporal Stress Inference")
-    parser.add_argument("--webcam", action="store_true", help="Launch live webcam stream")
+    parser.add_argument("--webcam", nargs="?", const=0, type=int, default=None, help="Launch live webcam (e.g. --webcam or --webcam 0)")
     parser.add_argument("--sequence", type=str, default=None, help="Path to sequence directory")
     args = parser.parse_args()
 
-    if args.webcam:
-        run_webcam_mode()
+    if args.webcam is not None:
+        run_webcam_mode(cam_id=args.webcam)
     else:
         run_sequence_demo(args.sequence)
