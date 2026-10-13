@@ -1,3 +1,0 @@
-"""
-visualization package initialization.
-"""

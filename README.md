@@ -40,10 +40,7 @@ The pipeline bridges self-supervised visual pre-training on unlabeled face video
                                       │
                                       ▼  [Phase 4: Real-Time Streaming & Deployment]
                    Live Webcam / Video Heads-Up Display (HUD) Dashboard
-                                      │
-                                      ▼  [Phase 5: ONNX & Edge Optimization]
-               ONNX Model Graph Conversion & Real-Time CPU/Edge Acceleration
-```
+`
 
 ---
 
@@ -106,9 +103,6 @@ The pipeline bridges self-supervised visual pre-training on unlabeled face video
 │   └── evaluate_temporal.py                # Phase 3 confusion matrix & threshold sweep
 ├── inference/
 │   └── predict_realtime.py                 # Phase 4 live webcam / video inference HUD
-├── optimization/
-│   ├── export_onnx.py                      # Phase 5 PyTorch to ONNX graph conversion
-│   └── benchmark_performance.py            # Latency, throughput (FPS), and memory benchmark
 ├── models_checkpoints/                     # Pretrained weights (.pth & .tflite)
 │   ├── self_supervised_backbone.pth        # Phase 1 SimCLR backbone (16.3 MB)
 │   ├── best_rafdb_affective_model.pth      # Phase 2 Affective Emotion model (45.6 MB)
@@ -146,12 +140,6 @@ python inference/predict_realtime.py --webcam 0
 Run the held-out subject evaluation:
 ```bash
 python evaluation/evaluate_temporal.py --data_dir ubfc_faces
-```
-
-### 4. Phase 5 ONNX Optimization
-Export trained PyTorch checkpoints into standardized ONNX runtime formats:
-```bash
-python optimization/export_onnx.py
 ```
 
 ---
