@@ -333,7 +333,8 @@ def train_temporal_model(
                 "val_acc": float(val_acc),
                 "val_f1": float(f1),
                 "window_size": window_size,
-                "input_dim": train_x.shape[-1]
+                "input_dim": train_x.shape[-1],
+                "hidden_dim": hidden_dim
             }, best_ckpt_path)
 
     # 4. Final Evaluation on Held-Out Test Subjects (subjects 38-42)

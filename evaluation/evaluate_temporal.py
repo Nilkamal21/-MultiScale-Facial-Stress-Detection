@@ -99,10 +99,18 @@ def run_temporal_evaluation(data_dir=None, ckpt_path=None, phase2_ckpt=None, win
 
     print(f"[Model Checkpoint] Loading: {final_ckpt}")
     ckpt = torch.load(final_ckpt, map_location=device, weights_only=False)
+    state_dict = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
     input_dim = ckpt.get("input_dim", test_feats.shape[-1])
     
-    model = TemporalStressGRU(input_dim=input_dim, hidden_dim=128, num_layers=2, num_classes=2, bidirectional=True).to(device)
-    model.load_state_dict(ckpt["model_state_dict"])
+    # Auto-detect hidden_dim from GRU weights
+    if "gru.weight_ih_l0" in state_dict:
+        hidden_dim = state_dict["gru.weight_ih_l0"].shape[0] // 3
+    else:
+        hidden_dim = ckpt.get("hidden_dim", 64)
+
+    print(f"[Model Spec] Input Dim: {input_dim} | Hidden Dim: {hidden_dim} (BiGRU)")
+    model = TemporalStressGRU(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=2, num_classes=2, bidirectional=True).to(device)
+    model.load_state_dict(state_dict)
     model.eval()
 
     with torch.no_grad():
