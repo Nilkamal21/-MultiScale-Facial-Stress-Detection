@@ -1,13 +1,17 @@
 """
 datasets/temporal_dataset.py
-Phase 3 (Temporal Stress Inference) — Steps 18 & 19: Temporal Sequence Dataset.
+Phase 3 (Temporal Stress Inference) — Steps 18 & 19: Temporal Sequence Dataset for UBFC.
 
-Slices KMU-FED driving video sequences into sliding temporal windows of length W (default: 10 frames),
+Slices facial video frame sequences into sliding temporal windows of length W (default: 10 frames),
 extracting continuous temporal tensors [W, C, H, W] for downstream recurrent modeling (Step 20).
-Implements subject-independent splits (train, val, test) and affective stress-cue mapping.
+Implements subject-independent splits (train: subjects 1-32, val: 33-37, test: 38-42)
+and ground-truth temporal stress labeling:
+    - Rest Baseline (t <= 30s / frame <= 180 at 6 FPS): Calm (Label 0)
+    - Math Quiz Stress Task (t > 30s / frame > 180 at 6 FPS): Stress (Label 1)
 """
 
 import os
+import re
 import sys
 import glob
 import pandas as pd
@@ -20,35 +24,17 @@ from torchvision import transforms
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
-# Subject-independent splits established in KMU-FED pipeline
+# Subject-independent splits established for 42 UBFC subjects
 SUBJECT_SPLITS = {
-    "train": [1, 3, 5, 6, 7, 9, 10, 12],
-    "val": [4, 8],
-    "test": [2, 11],
+    "train": [f"subject{i}" for i in range(1, 33)],
+    "val": [f"subject{i}" for i in range(33, 38)],
+    "test": [f"subject{i}" for i in range(38, 43)],
 }
 
-# Affective stress cue mapping (Methodological Rule - Step 14):
-# High Affective Tension cues: Fear, Disgust, Anger -> 1
-# Low Affective Tension / Baseline: Neutral, Happiness, Surprise -> 0
-AFFECTIVE_TENSION_MAP = {
-    "Anger": 1,
-    "Disgust": 1,
-    "Fear": 1,
-    "Happiness": 0,
-    "Neutral": 0,
-    "Surprise": 0,
-    "Sadness": 1,  # Negative valence / distress cue
-}
 
-EMOTION_NAME_TO_IDX = {
-    "Surprise": 0,
-    "Fear": 1,
-    "Disgust": 2,
-    "Happiness": 3,
-    "Sadness": 4,
-    "Anger": 5,
-    "Neutral": 6,
-}
+def natural_sort_key(s):
+    """Sort strings containing numbers in human order (subject2 before subject10)."""
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))]
 
 
 def get_default_temporal_transform():
@@ -60,90 +46,124 @@ def get_default_temporal_transform():
     ])
 
 
-class KMUTemporalDataset(Dataset):
+class UBFCTemporalDataset(Dataset):
     """
-    Constructs sliding temporal windows over KMU-FED video sequences.
+    Constructs sliding temporal windows over UBFC video face sequences.
     
     Each sample represents a continuous temporal window of W frames:
         X_t = [F_t, F_{t+1}, ..., F_{t+W-1}] of shape (W, 3, 224, 224)
-    along with its affective tension / stress proxy label and metadata.
+    along with its binary stress label (0 = Calm baseline, 1 = Arithmetic stress task).
     """
     def __init__(
         self,
+        data_dir=None,
         metadata_csv=None,
         split="train",
         window_size=10,
         stride=2,
+        baseline_seconds=30.0,
+        fps=6.0,
         transform=None,
     ):
         super().__init__()
-        self.metadata_csv = metadata_csv or os.path.join(config.METADATA_DIR, "kmu_fed_processed.csv")
         self.split = split
         self.window_size = window_size
         self.stride = stride
+        self.baseline_seconds = baseline_seconds
+        self.fps = fps
         self.transform = transform or get_default_temporal_transform()
 
-        if not os.path.exists(self.metadata_csv):
-            raise FileNotFoundError(f"Missing processed metadata: {self.metadata_csv}")
+        # Find data directory: /kaggle/working/ubfc_faces or fallback
+        self.data_dir = data_dir
+        if self.data_dir is None:
+            candidates = [
+                "/kaggle/working/ubfc_faces",
+                os.path.join(config.DATA_DIR, "ubfc_faces"),
+                os.path.join(config.PROJECT_ROOT, "ubfc_faces"),
+            ]
+            for c in candidates:
+                if os.path.exists(c) and len(os.listdir(c)) > 0:
+                    self.data_dir = c
+                    break
+            if self.data_dir is None:
+                self.data_dir = candidates[0]
 
-        df = pd.read_csv(self.metadata_csv)
-
-        # Filter by subject-independent split if specified
+        # Allowed subjects for the split
         if split in SUBJECT_SPLITS:
             allowed_subjects = set(SUBJECT_SPLITS[split])
-            df = df[df["subject_id"].isin(allowed_subjects)].copy()
-        elif split != "all":
+        elif split == "all":
+            allowed_subjects = None
+        else:
             raise ValueError(f"Invalid split: {split}. Choose from ['train', 'val', 'test', 'all'].")
 
-        # Sort chronologically by sequence and filename
-        df = df.sort_values(by=["sequence_id", "filename"]).reset_index(drop=True)
-
-        # Build sliding windows per sequence
         self.windows = []
-        grouped = df.groupby("sequence_id")
+        self._build_windows(allowed_subjects)
 
-        for seq_id, group in grouped:
-            frames_paths = group["processed_path"].tolist()
-            emotion = group["emotion"].iloc[0]
-            subject_id = group["subject_id"].iloc[0]
-            n_frames = len(frames_paths)
+    def _build_windows(self, allowed_subjects):
+        if not os.path.exists(self.data_dir):
+            return
+
+        # Find subject directories
+        subj_dirs = []
+        for d in sorted(os.listdir(self.data_dir), key=natural_sort_key):
+            full_d = os.path.join(self.data_dir, d)
+            if os.path.isdir(full_d):
+                if allowed_subjects is None or d.lower() in [s.lower() for s in allowed_subjects]:
+                    subj_dirs.append((d, full_d))
+
+        baseline_frame_cutoff = int(self.baseline_seconds * self.fps)
+
+        for subj_name, subj_path in subj_dirs:
+            # Find all image frames
+            frame_files = [
+                f for f in os.listdir(subj_path)
+                if f.lower().endswith((".jpg", ".jpeg", ".png"))
+            ]
+            frame_files.sort(key=natural_sort_key)
+
+            if len(frame_files) == 0:
+                continue
+
+            frame_paths = [os.path.join(subj_path, f) for f in frame_files]
+            n_frames = len(frame_paths)
 
             if n_frames < self.window_size:
-                # Sequence is shorter than window_size: pad by repeating last frame
-                padded_paths = frames_paths + [frames_paths[-1]] * (self.window_size - n_frames)
+                # Pad sequence if shorter than window_size
+                padded = frame_paths + [frame_paths[-1]] * (self.window_size - n_frames)
+                label = 0  # Short initial sequence is baseline
                 self.windows.append({
-                    "sequence_id": seq_id,
-                    "subject_id": subject_id,
-                    "emotion": emotion,
-                    "paths": padded_paths,
-                    "start_idx": 0,
-                    "is_padded": True,
+                    "subject_id": subj_name,
+                    "paths": padded,
+                    "label": label,
+                    "start_idx": 0
                 })
             else:
-                # Slide window across sequence
+                # Slide window across frames
                 start = 0
                 while start + self.window_size <= n_frames:
-                    window_paths = frames_paths[start: start + self.window_size]
+                    window_paths = frame_paths[start: start + self.window_size]
+                    mid_frame_idx = start + (self.window_size // 2)
+                    # Stress label: 0 if baseline (t <= 30s), 1 if task (t > 30s)
+                    label = 0 if mid_frame_idx <= baseline_frame_cutoff else 1
+
                     self.windows.append({
-                        "sequence_id": seq_id,
-                        "subject_id": subject_id,
-                        "emotion": emotion,
+                        "subject_id": subj_name,
                         "paths": window_paths,
-                        "start_idx": start,
-                        "is_padded": False,
+                        "label": label,
+                        "start_idx": start
                     })
                     start += self.stride
 
-                # Ensure tail frames are covered if last stride did not reach end
+                # Cover tail frames
                 if (start - self.stride + self.window_size) < n_frames:
-                    tail_paths = frames_paths[-self.window_size:]
+                    tail_paths = frame_paths[-self.window_size:]
+                    mid_frame_idx = n_frames - (self.window_size // 2)
+                    label = 0 if mid_frame_idx <= baseline_frame_cutoff else 1
                     self.windows.append({
-                        "sequence_id": seq_id,
-                        "subject_id": subject_id,
-                        "emotion": emotion,
+                        "subject_id": subj_name,
                         "paths": tail_paths,
-                        "start_idx": n_frames - self.window_size,
-                        "is_padded": False,
+                        "label": label,
+                        "start_idx": n_frames - self.window_size
                     })
 
     def __len__(self):
@@ -152,9 +172,8 @@ class KMUTemporalDataset(Dataset):
     def __getitem__(self, idx):
         item = self.windows[idx]
         image_paths = item["paths"]
-        emotion = item["emotion"]
+        label = item["label"]
 
-        # Load and transform each frame in the temporal window
         frame_tensors = []
         for path in image_paths:
             img = Image.open(path).convert("RGB")
@@ -162,21 +181,17 @@ class KMUTemporalDataset(Dataset):
                 img = self.transform(img)
             frame_tensors.append(img)
 
-        # Stack into [W, C, H, W] tensor
+        # Shape: [W, C, H, W]
         temporal_tensor = torch.stack(frame_tensors, dim=0)
+        return temporal_tensor, torch.tensor(label, dtype=torch.long), item["subject_id"]
 
-        tension_label = AFFECTIVE_TENSION_MAP.get(emotion, 0)
-        emotion_idx = EMOTION_NAME_TO_IDX.get(emotion, 6)
 
-        return (
-            temporal_tensor,
-            torch.tensor(tension_label, dtype=torch.long),
-            torch.tensor(emotion_idx, dtype=torch.long),
-            item["sequence_id"],
-        )
+# Alias for backward compatibility
+KMUTemporalDataset = UBFCTemporalDataset
 
 
 def get_temporal_dataloader(
+    data_dir=None,
     split="train",
     window_size=10,
     stride=2,
@@ -185,7 +200,8 @@ def get_temporal_dataloader(
     num_workers=0
 ):
     """Factory creating DataLoader for temporal video sequences."""
-    dataset = KMUTemporalDataset(
+    dataset = UBFCTemporalDataset(
+        data_dir=data_dir,
         split=split,
         window_size=window_size,
         stride=stride
@@ -199,30 +215,12 @@ def get_temporal_dataloader(
     )
 
 
-def run_temporal_dataset_test():
-    """Standalone diagnostic verifying Step 3.1 temporal dataset functionality."""
-    print("=" * 65)
-    print("  Phase 3 (Step 3.1) — KMU-FED Temporal Sliding Window Dataset")
-    print("=" * 65)
-
-    for split in ["train", "val", "test"]:
-        stride = 2 if split == "train" else 4
-        ds = KMUTemporalDataset(split=split, window_size=10, stride=stride)
-        n_tension = sum(AFFECTIVE_TENSION_MAP.get(w["emotion"], 0) for w in ds.windows)
-        print(f"[{split.upper():5s}] Windows: {len(ds):3d} | High Tension: {n_tension:2d} | Low Tension: {len(ds)-n_tension:2d} | Subjects: {SUBJECT_SPLITS[split]}")
-
-    # Inspect one sample batch
-    train_loader = get_temporal_dataloader(split="train", batch_size=4, shuffle=True)
-    batch_tensors, tension_labels, emotion_labels, seq_ids = next(iter(train_loader))
-
-    print("-" * 65)
-    print(f"[Batch Shape]     : {list(batch_tensors.shape)} -> [Batch, Window_Size, Channels, Height, Width]")
-    print(f"[Tension Labels]  : {tension_labels.tolist()} (1=Tension/Stress Cue, 0=Calm/Baseline)")
-    print(f"[Emotion Indices] : {emotion_labels.tolist()}")
-    print(f"[Sample Sequences]: {list(seq_ids)}")
-    print("=" * 65)
-    print("[SUCCESS] Step 3.1 Temporal Sequence Dataset verified!")
-
-
 if __name__ == "__main__":
-    run_temporal_dataset_test()
+    print("=" * 65)
+    print("  Phase 3 — UBFC Temporal Sliding Window Dataset Diagnostic")
+    print("=" * 65)
+    for sp in ["train", "val", "test"]:
+        ds = UBFCTemporalDataset(split=sp, window_size=10, stride=2)
+        n_stress = sum(w["label"] for w in ds.windows)
+        print(f"[{sp.upper():5s}] Windows: {len(ds):4d} | Stress (1): {n_stress:4d} | Calm (0): {len(ds)-n_stress:4d} | Subjects: {len(SUBJECT_SPLITS[sp])}")
+    print("[OK] Dataset definition verified!")

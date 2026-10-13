@@ -1,18 +1,21 @@
 """
 training/train_temporal.py
-Phase 3 (Temporal Stress Inference) — Steps 20, 21 & 22: Temporal Model Training & Smoothing.
+Phase 3 (Temporal Stress Inference) — Steps 18, 19, 20, 21 & 22: Temporal Model Training & Smoothing.
 
 1. Pre-extracts/caches frame-level affective feature representations [W, 1280] using the
    Phase 2 fine-tuned model (best_rafdb_affective_model.pth).
-2. Trains the Bidirectional GRU with Temporal Attention on subject-independent sequence splits.
-3. Implements Step 22: Moving-average temporal smoothing filter to eliminate frame flicker.
-4. Generates performance reports, smoothing comparison plots, and saves the final checkpoint.
+2. Trains the Bidirectional GRU with Temporal Attention on subject-independent UBFC splits
+   (Train: subjects 1-32, Val: subjects 33-37, Test: subjects 38-42).
+3. Evaluates binary stress classification performance (Calm vs Mental Task Stress).
+4. Implements Step 22: Moving-average temporal smoothing filter to eliminate frame flicker.
+5. Generates performance reports, smoothing comparison plots, and saves the final checkpoint.
 """
 
 import os
 import sys
 import json
 import time
+import argparse
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -27,18 +30,16 @@ import config
 from models.efficientnet_encoder import EfficientNetEncoder
 from models.emotion_classifier import EmotionClassifier, EndToEndEmotionModel
 from datasets.temporal_dataset import (
-    KMUTemporalDataset,
-    get_temporal_dataloader,
+    UBFCTemporalDataset,
     SUBJECT_SPLITS,
-    AFFECTIVE_TENSION_MAP,
 )
-from models.temporal_model import TemporalStressGRU, EndToEndTemporalStressModel
+from models.temporal_model import TemporalStressGRU
 
 TEMPORAL_RESULTS_DIR = os.path.join(config.RESULTS_DIR, "temporal")
-FEATURES_CACHE_DIR = os.path.join(config.DATA_DIR, "features")
+FEATURES_CACHE_DIR = os.path.join(config.PROJECT_ROOT, "features")
 
 
-def load_phase2_feature_extractor(device):
+def load_phase2_feature_extractor(ckpt_path=None, device="cuda"):
     """Loads the Phase 2 fine-tuned model to serve as the visual feature encoder."""
     backbone = EfficientNetEncoder(pretrained=False)
     classifier = EmotionClassifier(
@@ -53,48 +54,94 @@ def load_phase2_feature_extractor(device):
         num_classes=7
     )
 
-    ckpt_path = os.path.join(config.CHECKPOINTS_DIR, "best_rafdb_affective_model.pth")
-    if os.path.exists(ckpt_path):
-        print(f"[Phase 2 Model] Loading checkpoint: {ckpt_path}")
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-        state_dict = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
-        full_model.load_state_dict(state_dict)
-        print("[OK] Successfully loaded Phase 2 fine-tuned affective backbone!")
-    else:
-        print("[WARN] Phase 2 model not found! Using Phase 1 self-supervised backbone.")
-        phase1_ckpt = os.path.join(config.CHECKPOINTS_DIR, "self_supervised_backbone.pth")
-        if os.path.exists(phase1_ckpt):
-            full_model.encoder.load_state_dict(torch.load(phase1_ckpt, map_location=device, weights_only=False))
+    candidate_ckpts = []
+    if ckpt_path:
+        candidate_ckpts.append(ckpt_path)
+    candidate_ckpts.extend([
+        "/kaggle/working/Stress-Detection/models_checkpoints/best_rafdb_affective_model.pth",
+        "/kaggle/working/models_checkpoints/best_rafdb_affective_model.pth",
+        os.path.join(config.CHECKPOINTS_DIR, "best_rafdb_affective_model.pth"),
+        os.path.join(config.PROJECT_ROOT, "models_checkpoints", "best_rafdb_affective_model.pth"),
+    ])
+
+    loaded = False
+    for p in candidate_ckpts:
+        if os.path.exists(p):
+            print(f"[Phase 2 Model] Loading checkpoint: {p}")
+            ckpt = torch.load(p, map_location=device, weights_only=False)
+            state_dict = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
+            full_model.load_state_dict(state_dict)
+            print("[OK] Successfully loaded Phase 2 fine-tuned affective backbone!")
+            loaded = True
+            break
+
+    if not loaded:
+        print("[WARN] Phase 2 model not found! Checking Phase 1 self-supervised backbone...")
+        p1_candidates = [
+            "/kaggle/working/Stress-Detection/models_checkpoints/self_supervised_backbone.pth",
+            "/kaggle/working/models_checkpoints/self_supervised_backbone.pth",
+            os.path.join(config.CHECKPOINTS_DIR, "self_supervised_backbone.pth"),
+        ]
+        for p1 in p1_candidates:
+            if os.path.exists(p1):
+                print(f"[Phase 1 Model] Loading checkpoint: {p1}")
+                full_model.encoder.load_state_dict(torch.load(p1, map_location=device, weights_only=False))
+                print("[OK] Loaded Phase 1 self-supervised backbone!")
+                loaded = True
+                break
+
+    if not loaded:
+        print("[WARN] No checkpoint found. Using initialized EfficientNet backbone.")
 
     full_model = full_model.to(device)
     full_model.eval()
     return full_model.encoder
 
 
-def extract_or_load_features(encoder, split, window_size=10, stride=2, device="cuda"):
+def extract_or_load_features(
+    encoder,
+    data_dir,
+    split,
+    window_size=10,
+    stride=2,
+    baseline_seconds=30.0,
+    fps=6.0,
+    device="cuda"
+):
     """
     Extracts frame features using the Phase 2 encoder and caches them to disk.
     If already cached, loads instantly.
     """
     os.makedirs(FEATURES_CACHE_DIR, exist_ok=True)
-    cache_file = os.path.join(FEATURES_CACHE_DIR, f"features_{split}_w{window_size}_s{stride}.pt")
+    cache_file = os.path.join(FEATURES_CACHE_DIR, f"ubfc_features_{split}_w{window_size}_s{stride}.pt")
 
     if os.path.exists(cache_file):
         print(f"[Cache Hit] Loading pre-extracted features for {split.upper()} from {cache_file}")
         data = torch.load(cache_file, map_location="cpu", weights_only=False)
-        return data["features"], data["labels"], data["seq_ids"]
+        return data["features"], data["labels"], data.get("subject_ids", [])
 
     print(f"[Extracting] Pre-extracting frame features for {split.upper()} on {device}...")
-    dataset = KMUTemporalDataset(split=split, window_size=window_size, stride=stride)
+    dataset = UBFCTemporalDataset(
+        data_dir=data_dir,
+        split=split,
+        window_size=window_size,
+        stride=stride,
+        baseline_seconds=baseline_seconds,
+        fps=fps
+    )
+
+    if len(dataset) == 0:
+        raise RuntimeError(f"No temporal windows found for split '{split}' in {data_dir}!")
+
     loader = DataLoader(dataset, batch_size=4, shuffle=False, num_workers=0)
 
     all_features = []
     all_labels = []
-    all_seq_ids = []
+    all_subj_ids = []
 
     encoder.eval()
     with torch.no_grad():
-        for batch_video, batch_labels, _, batch_seqs in loader:
+        for batch_video, batch_labels, batch_subjs in loader:
             b, w, c, h, w_dim = batch_video.shape
             flat_frames = batch_video.view(b * w, c, h, w_dim).to(device)
             feats = encoder(flat_frames)  # (b * w, 1280)
@@ -102,14 +149,14 @@ def extract_or_load_features(encoder, split, window_size=10, stride=2, device="c
 
             all_features.append(seq_feats)
             all_labels.append(batch_labels)
-            all_seq_ids.extend(batch_seqs)
+            all_subj_ids.extend(batch_subjs)
 
     features = torch.cat(all_features, dim=0)
     labels = torch.cat(all_labels, dim=0)
 
-    torch.save({"features": features, "labels": labels, "seq_ids": all_seq_ids}, cache_file)
+    torch.save({"features": features, "labels": labels, "subject_ids": all_subj_ids}, cache_file)
     print(f"[Cached] Saved {features.shape[0]} feature windows to {cache_file}")
-    return features, labels, all_seq_ids
+    return features, labels, all_subj_ids
 
 
 class TemporalMovingAverageSmoother:
@@ -140,18 +187,27 @@ class TemporalMovingAverageSmoother:
 
 
 def train_temporal_model(
+    data_dir=None,
+    phase2_ckpt=None,
     epochs=15,
     batch_size=16,
     lr=1e-3,
     hidden_dim=128,
+    window_size=10,
+    stride=2,
+    baseline_seconds=30.0,
+    fps=6.0,
     dropout=0.3
 ):
     print("=" * 65)
-    print("  Phase 3 — Temporal Stress Inference (Steps 18–22)")
-    print(f"  Target Epochs  : {epochs}")
-    print(f"  Batch Size     : {batch_size}")
-    print(f"  Learning Rate  : {lr}")
-    print(f"  GRU Hidden Dim : {hidden_dim} (Bidirectional)")
+    print("  Phase 3 — Temporal Stress Sequence Modeling (Steps 18–22)")
+    print(f"  Target Epochs      : {epochs}")
+    print(f"  Batch Size         : {batch_size}")
+    print(f"  Learning Rate      : {lr}")
+    print(f"  Window Size        : {window_size} frames")
+    print(f"  Training Stride    : {stride}")
+    print(f"  GRU Hidden Dim     : {hidden_dim} (Bidirectional + Temporal Attention)")
+    print(f"  Baseline Cutoff    : {baseline_seconds}s at {fps} FPS")
     print("=" * 65)
 
     os.makedirs(TEMPORAL_RESULTS_DIR, exist_ok=True)
@@ -162,12 +218,23 @@ def train_temporal_model(
     print(f"[Device] Using: {device}")
 
     # 1. Feature Extractor
-    encoder = load_phase2_feature_extractor(device)
+    encoder = load_phase2_feature_extractor(ckpt_path=phase2_ckpt, device=device)
 
     # 2. Extract / Load Features
-    train_x, train_y, train_seqs = extract_or_load_features(encoder, "train", window_size=10, stride=2, device=device)
-    val_x, val_y, val_seqs = extract_or_load_features(encoder, "val", window_size=10, stride=2, device=device)
-    test_x, test_y, test_seqs = extract_or_load_features(encoder, "test", window_size=10, stride=2, device=device)
+    train_x, train_y, train_subjs = extract_or_load_features(
+        encoder, data_dir, "train", window_size=window_size, stride=stride,
+        baseline_seconds=baseline_seconds, fps=fps, device=device
+    )
+    val_x, val_y, val_subjs = extract_or_load_features(
+        encoder, data_dir, "val", window_size=window_size, stride=stride * 2,
+        baseline_seconds=baseline_seconds, fps=fps, device=device
+    )
+    test_x, test_y, test_subjs = extract_or_load_features(
+        encoder, data_dir, "test", window_size=window_size, stride=stride * 2,
+        baseline_seconds=baseline_seconds, fps=fps, device=device
+    )
+
+    print(f"[Dataset] Train Windows: {len(train_x)} | Val Windows: {len(val_x)} | Test Windows: {len(test_x)}")
 
     train_loader = DataLoader(TensorDataset(train_x, train_y), batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(TensorDataset(val_x, val_y), batch_size=batch_size, shuffle=False)
@@ -183,12 +250,15 @@ def train_temporal_model(
         bidirectional=True
     ).to(device)
 
-    # Class weights for balanced tension learning
-    num_neg = (train_y == 0).sum().item()
-    num_pos = (train_y == 1).sum().item()
-    weight_tensor = torch.tensor([num_pos / (num_neg + 1e-5), 1.0], dtype=torch.float).to(device)
-    criterion = nn.CrossEntropyLoss(weight=weight_tensor)
+    # Balanced class weights for Calm (0) vs Stress (1)
+    num_calm = (train_y == 0).sum().item()
+    num_stress = (train_y == 1).sum().item()
+    w_calm = float(len(train_y)) / (2.0 * max(num_calm, 1))
+    w_stress = float(len(train_y)) / (2.0 * max(num_stress, 1))
+    weight_tensor = torch.tensor([w_calm, w_stress], dtype=torch.float).to(device)
+    print(f"[Class Weights] Calm (0): {w_calm:.2f} | Stress (1): {w_stress:.2f}")
 
+    criterion = nn.CrossEntropyLoss(weight=weight_tensor)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=3)
 
@@ -196,7 +266,7 @@ def train_temporal_model(
     best_ckpt_path = os.path.join(config.CHECKPOINTS_DIR, "best_temporal_stress_model.pth")
     history = []
 
-    print("\n--- Training Recurrent Temporal GRU ---")
+    print("\n--- Training Recurrent Temporal GRU with Temporal Attention ---")
     for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0.0
@@ -240,7 +310,9 @@ def train_temporal_model(
         f1 *= 100.0
         scheduler.step(f1)
 
-        print(f"Epoch [{epoch:2d}/{epochs:2d}] Train Loss: {train_loss:.4f} | Train Acc: {train_acc:5.1f}% | Val Acc: {val_acc:5.1f}% | Val F1: {f1:5.1f}%")
+        is_best = f1 > best_val_f1
+        marker = " *" if is_best else ""
+        print(f"Epoch [{epoch:2d}/{epochs:2d}] Train Loss: {train_loss:.4f} (Acc: {train_acc:5.1f}%) | Val Loss: {val_loss:.4f} (Acc: {val_acc:5.1f}%, F1: {f1:5.1f}%){marker}")
 
         history.append({
             "epoch": epoch,
@@ -251,19 +323,19 @@ def train_temporal_model(
             "val_f1": f1
         })
 
-        if f1 > best_val_f1:
+        if is_best:
             best_val_f1 = f1
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
                 "val_acc": float(val_acc),
                 "val_f1": float(f1),
-                "window_size": 10,
-                "input_dim": 1280
+                "window_size": window_size,
+                "input_dim": train_x.shape[-1]
             }, best_ckpt_path)
 
-    # 4. Final Evaluation on Held-Out Test Subjects [2, 11]
-    print("\n--- Evaluating Best Model on Test Subjects [2, 11] ---")
+    # 4. Final Evaluation on Held-Out Test Subjects (subjects 38-42)
+    print("\n--- Evaluating Best Temporal Model on Held-Out Test Subjects (38–42) ---")
     if os.path.exists(best_ckpt_path):
         ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
@@ -293,9 +365,8 @@ def train_temporal_model(
     raw_probs = np.array(test_probs)
     smoothed_probs = smoother.smooth_sequence(raw_probs)
 
-    # Measure jitter (average absolute difference between consecutive predictions)
-    raw_jitter = np.mean(np.abs(np.diff(raw_probs))) if len(raw_probs) > 1 else 0.0
-    smooth_jitter = np.mean(np.abs(np.diff(smoothed_probs))) if len(smoothed_probs) > 1 else 0.0
+    raw_jitter = float(np.mean(np.abs(np.diff(raw_probs)))) if len(raw_probs) > 1 else 0.0
+    smooth_jitter = float(np.mean(np.abs(np.diff(smoothed_probs)))) if len(smoothed_probs) > 1 else 0.0
     jitter_reduction = ((raw_jitter - smooth_jitter) / (raw_jitter + 1e-6)) * 100.0
 
     print(f"[Step 22 Smoothing] Raw Prediction Jitter: {raw_jitter:.4f} -> Smoothed Jitter: {smooth_jitter:.4f} ({jitter_reduction:.1f}% reduction in flicker!)")
@@ -331,7 +402,7 @@ def train_temporal_model(
         "raw_jitter": float(raw_jitter),
         "smoothed_jitter": float(smooth_jitter),
         "jitter_reduction_percent": float(jitter_reduction),
-        "window_size": int(10),
+        "window_size": int(window_size),
         "smoothing_k": int(3),
         "train_windows": int(len(train_x)),
         "val_windows": int(len(val_x)),
@@ -350,5 +421,32 @@ def train_temporal_model(
     return summary
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Phase 3 Temporal Stress Modeling on UBFC")
+    parser.add_argument("--data_dir", type=str, default="/kaggle/working/ubfc_faces", help="Path to extracted UBFC faces")
+    parser.add_argument("--phase2_ckpt", type=str, default=None, help="Path to best_rafdb_affective_model.pth")
+    parser.add_argument("--epochs", type=int, default=15, help="Number of training epochs")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
+    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
+    parser.add_argument("--hidden_dim", type=int, default=128, help="GRU hidden dimension")
+    parser.add_argument("--window_size", type=int, default=10, help="Window size (frames)")
+    parser.add_argument("--stride", type=int, default=2, help="Window stride for train")
+    parser.add_argument("--baseline_seconds", type=float, default=30.0, help="Baseline duration in seconds")
+    parser.add_argument("--fps", type=float, default=6.0, help="Sampling frame rate")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    train_temporal_model(epochs=15, batch_size=16, lr=1e-3, hidden_dim=128)
+    args = parse_args()
+    train_temporal_model(
+        data_dir=args.data_dir,
+        phase2_ckpt=args.phase2_ckpt,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        hidden_dim=args.hidden_dim,
+        window_size=args.window_size,
+        stride=args.stride,
+        baseline_seconds=args.baseline_seconds,
+        fps=args.fps,
+    )

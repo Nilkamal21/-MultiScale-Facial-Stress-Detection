@@ -1,8 +1,8 @@
 """
 evaluation/evaluate_temporal.py
-Phase 3 (Temporal Stress Inference) — Comprehensive Evaluation & Confusion Matrix.
+Phase 3 (Temporal Stress Inference) — Comprehensive Evaluation & Confusion Matrix on UBFC.
 
-Evaluates best_temporal_stress_model.pth on held-out test drivers (Drivers [02, 11]).
+Evaluates best_temporal_stress_model.pth on held-out test subjects (subjects 38–42).
 Generates:
 1. Confusion Matrix (Raw counts & Normalized percentage heatmap)
 2. Classification report CSV & JSON
@@ -12,12 +12,13 @@ Generates:
 import os
 import sys
 import json
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import torch
-from sklearn.metrics import confusion_matrix, classification_report, accuracy_score, precision_recall_fscore_support
+from sklearn.metrics import confusion_matrix, classification_report, accuracy_score, precision_recall_fscore_support, roc_auc_score
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
@@ -56,14 +57,14 @@ def plot_temporal_confusion_matrix(cm, class_names, output_path, title="Temporal
 
     plt.title(title, fontsize=12, pad=12, fontweight="bold")
     plt.xlabel("Predicted State", fontsize=11, labelpad=8)
-    plt.ylabel("True Driver State", fontsize=11, labelpad=8)
+    plt.ylabel("True Subject State", fontsize=11, labelpad=8)
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
     print(f"[Saved Heatmap] {output_path}")
 
 
-def run_temporal_evaluation():
+def run_temporal_evaluation(data_dir=None, ckpt_path=None, phase2_ckpt=None, window_size=10, stride=4):
     print("=" * 65)
     print("  Phase 3 — Temporal BiGRU Stress Confusion Matrix Evaluation")
     print("=" * 65)
@@ -72,16 +73,35 @@ def run_temporal_evaluation():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load feature extractor and extract/load test features
-    encoder = load_phase2_feature_extractor(device)
-    test_feats, test_labels, seq_ids = extract_or_load_features(encoder, "test", window_size=10, stride=2, device=device)
+    encoder = load_phase2_feature_extractor(ckpt_path=phase2_ckpt, device=device)
+    test_feats, test_labels, subjs = extract_or_load_features(
+        encoder, data_dir, "test", window_size=window_size, stride=stride, device=device
+    )
 
-    # Load trained BiGRU
-    model = TemporalStressGRU(input_dim=1280, hidden_dim=128, num_layers=2, num_classes=2, bidirectional=True).to(device)
-    ckpt_path = os.path.join(config.CHECKPOINTS_DIR, "best_temporal_stress_model.pth")
-    if not os.path.exists(ckpt_path):
-        raise FileNotFoundError(f"Missing checkpoint: {ckpt_path}")
+    # Candidate checkpoints
+    candidate_ckpts = []
+    if ckpt_path:
+        candidate_ckpts.append(ckpt_path)
+    candidate_ckpts.extend([
+        os.path.join(config.CHECKPOINTS_DIR, "best_temporal_stress_model.pth"),
+        "/kaggle/working/Stress-Detection/models_checkpoints/best_temporal_stress_model.pth",
+        "/kaggle/working/models_checkpoints/best_temporal_stress_model.pth",
+    ])
 
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    final_ckpt = None
+    for p in candidate_ckpts:
+        if os.path.exists(p):
+            final_ckpt = p
+            break
+
+    if final_ckpt is None:
+        raise FileNotFoundError(f"Missing temporal model checkpoint: {candidate_ckpts}")
+
+    print(f"[Model Checkpoint] Loading: {final_ckpt}")
+    ckpt = torch.load(final_ckpt, map_location=device, weights_only=False)
+    input_dim = ckpt.get("input_dim", test_feats.shape[-1])
+    
+    model = TemporalStressGRU(input_dim=input_dim, hidden_dim=128, num_layers=2, num_classes=2, bidirectional=True).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 
@@ -117,13 +137,36 @@ def run_temporal_evaluation():
     print(f"[Saved Report] {rep_csv}")
 
     acc = accuracy_score(targets, preds) * 100.0
-    prec, rec, f1, _ = precision_recall_fscore_support(targets, preds, average="binary")
-    print(f"\nFinal Test Metrics on Unseen Drivers [02, 11]:")
+    prec, rec, f1, _ = precision_recall_fscore_support(targets, preds, average="binary", zero_division=0)
+    try:
+        auc = roc_auc_score(targets, probs) * 100.0
+    except Exception:
+        auc = 0.0
+
+    print(f"\nFinal Test Metrics on Unseen UBFC Subjects (38–42):")
     print(f"  - Accuracy : {acc:.2f}% ({cm[0,0] + cm[1,1]}/{len(targets)} windows)")
-    print(f"  - Precision: {prec * 100:.2f}% (Zero False Positives: {cm[0,1]} calm windows called stress)")
-    print(f"  - Recall   : {rec * 100:.2f}% ({cm[1,1]}/{cm[1,0] + cm[1,1]} acute events caught)")
+    print(f"  - Precision: {prec * 100:.2f}%")
+    print(f"  - Recall   : {rec * 100:.2f}%")
     print(f"  - F1-Score : {f1 * 100:.2f}%")
+    print(f"  - ROC-AUC  : {auc:.2f}%")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate Temporal Stress BiGRU")
+    parser.add_argument("--data_dir", type=str, default="/kaggle/working/ubfc_faces")
+    parser.add_argument("--checkpoint", type=str, default=None)
+    parser.add_argument("--phase2_ckpt", type=str, default=None)
+    parser.add_argument("--window_size", type=int, default=10)
+    parser.add_argument("--stride", type=int, default=4)
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    run_temporal_evaluation()
+    args = parse_args()
+    run_temporal_evaluation(
+        data_dir=args.data_dir,
+        ckpt_path=args.checkpoint,
+        phase2_ckpt=args.phase2_ckpt,
+        window_size=args.window_size,
+        stride=args.stride
+    )
