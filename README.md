@@ -1,213 +1,162 @@
 # Cross-Domain Self-Supervised Adaptation Pipeline for Facial Affect & Temporal Stress Inference
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.6%20CUDA-red.svg)](https://pytorch.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red.svg)](https://pytorch.org/)
 [![Backbone](https://img.shields.io/badge/Backbone-EfficientNet--B0-brightgreen.svg)](https://github.com/lukemelas/EfficientNet-PyTorch)
 [![Temporal](https://img.shields.io/badge/Temporal-Bidirectional%20GRU%20%2B%20Attention-orange.svg)]()
-[![Status](https://img.shields.io/badge/Status-Phases%201--5%20Complete%20%26%20Verified-success.svg)]()
+[![Dataset](https://img.shields.io/badge/Datasets-UBFC--rPPG%20%7C%20RAF--DB-purple.svg)]()
 
-An end-to-end deep learning framework designed to solve real-world driver affect and stress detection on **KMU-FED** (12 vehicle drivers, 61 video sequences, 1,045 eye-aligned frames) through **Self-Supervised SimCLR Pre-Training**, **Cross-Domain Affective Transfer (RAF-DB)**, **Temporal Sequence Modeling (BiGRU with Attention & Moving-Average Smoothing)**, and **Phase 5 ONNX & Quantized Hardware Optimization**.
+An end-to-end deep learning framework implementing the complete **5-Phase Cross-Domain Self-Supervised Adaptation Pipeline** for facial affective representation learning and temporal stress inference on raw video frames. 
+
+The pipeline bridges self-supervised visual pre-training on unlabeled face videos (**UBFC-rPPG**), affective transfer learning across 7 basic emotions (**RAF-DB**), and temporal micro-expression sequence modeling (**Bidirectional GRU with Temporal Attention and Moving-Average Smoothing**) to achieve **contact-free, camera-only stress detection**.
 
 ---
 
 ## 📌 Architecture & Pipeline Overview
 
 ```text
-Unlabeled Facial Video Sequences (KMU-FED)
-                 │
-                 ▼  [Cross-Domain Phase 1: Self-Supervised SimCLR Pre-Training]
-      Invariant Face Geometry Representation (self_supervised_backbone.pth)
-                 │
-                 ▼  [Cross-Domain Phase 2: Affective Transfer Learning (RAF-DB)]
-      Fine-Tuned Affective Backbone — 70.73% Test Accuracy (best_rafdb_affective_model.pth)
-                 │
-                 ▼  [Cross-Domain Phase 3: Temporal Sequence Modeling]
-      10-Frame Sliding Windows ➔ Bidirectional GRU ➔ Temporal Attention Spotlight
-      Step 22 Moving-Average Smoothing ➔ 93.18% Test Accuracy (best_temporal_stress_model.pth)
-                 │
-                 ▼  [Cross-Domain Phase 4: Real-Time Streaming & Tracking]
-      Rolling Buffer [F_t-9, ..., F_t] ➔ Real-Time Heads-Up Display (HUD) Dashboard
-                 │
-                 ▼  [Cross-Domain Phase 5: Hardware Optimization & Deployment]
-      ONNX Export (16.5 MB) ➔ INT8 Quantization (9.8 MB) ➔ Adaptive Tracking Engine (69.2 ms / 14.5 FPS)
+               [Unlabeled Facial Videos (UBFC-rPPG: 42 Subjects)]
+                                      │
+                                      ▼  [Phase 1: Self-Supervised SimCLR Pre-Training]
+                 Invariant Facial Geometry Backbone (Loss: 0.6865 ➔ 0.1995)
+                                      │
+                                      ▼  [Phase 2: Supervised Affective Transfer (RAF-DB)]
+               Fine-Tuned Affective Feature Extractor — 71.84% Test Accuracy
+                         (1,280-Dimensional Facial Affect Vectors)
+                                      │
+                                      ▼  [Phase 3: Temporal Stress Sequence Modeling]
+                   10-Frame Sliding Windows (W=10, 6 FPS ≈ 1.7s)
+                                      │
+                         ┌────────────┴────────────┐
+                         ▼                         ▼
+                 Bidirectional GRU       Temporal Attention Pooling
+                         │                         │
+                         └────────────┬────────────┘
+                                      ▼
+                        Binary Stress Classifier (0 = Calm, 1 = Stress)
+                                      │
+                                      ▼  [Step 22: Moving-Average Smoothing Filter]
+                           Smoothed Stress Signal (34.6% Jitter Reduction)
+                                      │
+                                      ▼  [Phase 4: Real-Time Streaming & Deployment]
+                   Live Webcam / Video Heads-Up Display (HUD) Dashboard
+                                      │
+                                      ▼  [Phase 5: ONNX & Edge Optimization]
+               ONNX Model Graph Conversion & Real-Time CPU/Edge Acceleration
 ```
 
 ---
 
 ## 📊 Comprehensive Performance Scorecard
 
-### 0. Cross-Domain Phase 5: Hardware Optimization & Turbo Deployment
-| Metric / Component | Score | Clinical & Operational Advantage |
-| :--- | :---: | :--- |
-| **ONNX Runtime CPU Speed** | **16.03 ms / 62.4 FPS** | **2.0x faster than PyTorch CPU**, matching dedicated GPU speeds on commodity CPUs |
-| **CUDA GPU Throughput** | **60.7 FPS (FP32) / 52.7 FPS (FP16)** | Real-time vehicle compute with only **19.6 MB VRAM footprint** (34% VRAM saved) |
-| **INT8 Memory Reduction** | **55.3% Space Saved (9.8 MB total)** | Shrinks entire dual-model pipeline from 22.01 MB to 9.83 MB for micro-controllers |
-| **Adaptive Tracking Speedup** | **4.1x End-to-End Speedup** | Latency slashed from 281.3 ms down to **69.2 ms (14.5 FPS)** on pure CPU |
-| **Tracking-Frame Latency** | **8.3 ms – 14.1 ms** | Instantaneous 70–120 FPS capability between detection intervals |
+### 1. Phase 1 — Self-Supervised Pre-Training (SimCLR on UBFC Videos)
+* **Dataset:** 16,719 aligned $224 \times 224$ face frames across 42 UBFC subjects.
+* **Loss Function:** NT-Xent (Normalized Temperature-scaled Cross Entropy, $\tau = 0.07$).
+* **Training Convergence:** Train Loss decreased from **0.6865 $\to$ 0.1995**; Validation Loss dropped from **0.6108 $\to$ 0.1961**.
+* **Representation Learned:** General facial geometry, eye and mouth structures, skin texture, and pose invariants without requiring any human labels.
 
-### 1. Cross-Domain Phase 3: Temporal Stress Inference (Held-Out Drivers `[02, 11]`)
-| Metric | Score | Clinical / Operational Meaning |
-| :--- | :---: | :--- |
-| **Test Accuracy** | **93.18%** | 41 out of 44 temporal sequence windows correctly classified |
-| **Test Precision** | **100.00%** | **Zero False Alarms!** Every stress alert is 100% genuine |
-| **Test Recall** | **90.32%** | Successfully catches over 9 out of 10 acute stress events |
-| **Test F1-Score** | **94.92%** | High harmonic mean between precision and recall |
-| **Test ROC-AUC** | **98.26%** | Near-perfect separation between calm and stressed score distributions |
-| **Step 22 Jitter Reduction** | **16.9%** | Rolling moving-average filter ($K=3$) eliminates annoying frame flicker |
+### 2. Phase 2 — Supervised Affective Transfer Learning (RAF-DB 7-Class Emotions)
+* **Dataset:** 12,271 training faces / 3,068 test faces across 7 basic emotions (*Surprise, Fear, Disgust, Happiness, Sadness, Anger, Neutral*).
+* **Class Imbalance Strategy:** Square-root smoothed inverse class-frequency weighting ($(\frac{N}{7 \cdot N_c})^{0.5}$).
+* **Progressive Unfreezing:**
+  * **Stage A (Frozen Backbone):** 55.44% Test Accuracy.
+  * **Stage B (Top 2 Blocks Unfrozen):** 56.49% Test Accuracy.
+  * **Stage B+ (Top 3 Blocks Unfrozen + Smoothed Weights):** 69.59% Test Accuracy.
+  * **Stage C (Refined LR $8 \times 10^{-5}$):** **71.84% Test Accuracy** (Train Acc: 76.97%, Test Loss: 0.8041).
+* **Output:** 1,280-dimensional affective feature representation vectors ($F_t \to f_t$).
 
-### 2. Cross-Domain Phase 2: Affective Transfer Learning (RAF-DB Test Set: 3,068 Faces)
-| Metric | Score | Note |
-| :--- | :---: | :--- |
-| **Test Accuracy** | **70.73%** | 2,170 / 3,068 in-the-wild test faces correct (Stage B Fine-Tuning) |
-| **Weighted F1-Score** | **70.13%** | Balanced across imbalanced real-world distributions |
-| **Fear Precision (Key Stress Cue)** | **77.42%** | Highly reliable detection of acute distress cues |
-| **Happiness Precision** | **86.27%** | Clean separation of positive/calm states |
-
-### 3. Baseline KMU-FED FER: Static Image Pipeline (Phases 1–17)
-- **Overall Accuracy:** **57.05%** on unseen test subjects (vs 16.67% random baseline).
-- **Strict Subject Independence:** Zero leakage between training and testing drivers.
+### 3. Phase 3 — Temporal Stress Inference (Subject-Independent Split on UBFC)
+* **Protocol:** First 30 seconds ($t \le 30\text{s}$, frames 1–180) = **Calm Baseline (0)**; After 30 seconds ($t > 30\text{s}$, frames > 180, Mental Arithmetic Quiz) = **Acute Stress (1)**.
+* **Subject Split:** 
+  * **Train:** Subjects 1–32 (4,784 sliding windows)
+  * **Validation:** Subjects 33–37 (508 sliding windows)
+  * **Held-Out Test:** Subjects 38–42 (508 sliding windows — **completely unseen people**)
+* **Test Performance (Subjects 38–42):**
+  * **Stress Recall (Sensitivity):** **83.33%** (Catches >83% of all genuine acute stress episodes).
+  * **F1-Score:** **67.61%**.
+  * **Precision:** **56.87%**.
+  * **Overall Accuracy:** **54.72%**.
+* **Step 22 Moving-Average Smoothing Filter ($K=3$):**
+  * Raw Prediction Jitter: `0.0364` $\longrightarrow$ Smoothed Jitter: `0.0238` (**34.6% reduction in flicker!**).
 
 ---
 
-## 🗂️ Project Directory Structure
+## 📁 Repository Structure
 
 ```text
-KMU-FED-2/
-├── config.py                       # Central paths, constants, and hyperparameters
-├── for_me.md                       # Beginner-friendly master guide with Q&A boxes
-├── explainable.md                  # Comprehensive engineering design decisions & metrics
-├── predict.py                      # Baseline single-image emotion inference tool
-│
-├── data/
-│   ├── frames/                     # Verified video frames staged into 61 sequences
-│   ├── detected_faces/             # Cropped faces (MediaPipe BlazeFace with 10% safety margin)
-│   ├── aligned_faces/              # Faces rotated to level the eye axis horizontally
-│   ├── processed/                  # Final 224x224 RGB faces ready for neural networks
-│   ├── features/                   # Cached 1280-dim temporal feature vectors (.pt)
-│   ├── metadata/                   # Train/Val/Test CSVs and sequence logs
-│   └── DATASET/                    # RAF-DB dataset (15,339 aligned faces)
-│
+├── config.py                               # Central hyperparameters, image sizes, and subject splits
 ├── datasets/
-│   ├── simclr_dataset.py           # Phase 1: Self-supervised positive-pair augmentations
-│   ├── rafdb_dataset.py            # Phase 2: RAF-DB affective dataset & dataloaders
-│   ├── temporal_dataset.py         # Phase 3: 10-frame sliding window temporal dataset
-│   └── contrastive_dataset.py      # Baseline: Siamese contrastive pair dataset
-│
+│   ├── simclr_dataset.py                   # Positive pair augmentation pipeline for SimCLR
+│   ├── rafdb_dataset.py                    # 7-Class RAF-DB dataset loader
+│   └── temporal_dataset.py                 # Sliding temporal window dataset for UBFC videos
 ├── models/
-│   ├── efficientnet_encoder.py     # EfficientNet-B0 backbone (1,280 feature outputs)
-│   ├── simclr_model.py             # Phase 1: SimCLR model with NT-Xent contrastive loss
-│   ├── emotion_classifier.py       # Phase 2: 7-class emotion classification head
-│   ├── temporal_model.py           # Phase 3: Bidirectional GRU with Temporal Attention
-│   └── contrastive_model.py        # Baseline: Siamese contrastive network
-│
-├── models_checkpoints/
-│   ├── self_supervised_backbone.pth # Phase 1: Pre-trained SimCLR backbone (16.3 MB)
-│   ├── best_rafdb_affective_model.pth # Phase 2: Fine-tuned 70.73% model (20.3 MB)
-│   ├── best_temporal_stress_model.pth # Phase 3: Best BiGRU temporal stress model
-│   ├── blaze_face_short_range.tflite  # MediaPipe BlazeFace face detector model (229 KB)
-│   └── best_emotion_model.pth      # Baseline: End-to-end KMU-FED emotion checkpoint
-│
+│   ├── efficientnet_encoder.py             # EfficientNet-B0 visual backbone (1,280-d features)
+│   ├── simclr_model.py                     # Self-supervised encoder + MLP projection head
+│   ├── emotion_classifier.py               # 7-Class emotion classifier head
+│   └── temporal_model.py                   # Bidirectional GRU + Temporal Attention Pooling head
+├── preprocessing/
+│   ├── extract_ubfc_faces.py               # Native ultra-fast FFmpeg face crop extraction
+│   └── mediapipe_face_detector.py          # MediaPipe BlazeFace face detector & tracker
 ├── training/
-│   ├── train_simclr.py             # Phase 1: Self-supervised pre-training loop
-│   ├── train_rafdb_transfer.py     # Phase 2: Stage A warmup + Stage B fine-tuning
-│   ├── train_temporal.py           # Phase 3: BiGRU training & Step 22 smoothing evaluation
-│   ├── train_contrastive.py        # Baseline: Siamese contrastive training
-│   └── train_classifier.py         # Baseline: Three-stage classifier training
-│
-├── inference/
-│   └── predict_realtime.py         # Phase 4: Live webcam & video sliding-window engine
-│
+│   ├── train_simclr.py                     # Phase 1: Self-supervised pretraining
+│   ├── train_rafdb_transfer.py             # Phase 2: Affective transfer learning
+│   └── train_temporal.py                   # Phase 3: Recurrent temporal stress training
 ├── evaluation/
-│   ├── evaluate_rafdb.py           # Phase 2: Full RAF-DB confusion matrices & reports
-│   └── evaluate.py                 # Baseline: KMU-FED evaluation suite
-│
-├── logs/                           # Training history CSVs and failure records
-└── results/
-    ├── realtime/                   # Phase 4: Heads-up display preview & JSON summary
-    ├── temporal/                   # Phase 3: Moving-average smoothing comparison plots
-    ├── raf_db/                     # Phase 2: Heatmaps, normalized CM, and reports
-    └── kmu_fed/                    # Baseline: t-SNE, PCA, and per-class bar charts
+│   ├── evaluate_rafdb.py                   # Phase 2 emotion evaluation
+│   └── evaluate_temporal.py                # Phase 3 confusion matrix & threshold sweep
+├── inference/
+│   └── predict_realtime.py                 # Phase 4 live webcam / video inference HUD
+├── optimization/
+│   ├── export_onnx.py                      # Phase 5 PyTorch to ONNX graph conversion
+│   └── benchmark_performance.py            # Latency, throughput (FPS), and memory benchmark
+├── models_checkpoints/                     # Pretrained weights (.pth & .tflite)
+│   ├── self_supervised_backbone.pth        # Phase 1 SimCLR backbone (16.3 MB)
+│   ├── best_rafdb_affective_model.pth      # Phase 2 Affective Emotion model (45.6 MB)
+│   ├── best_temporal_stress_model.pth      # Phase 3 Temporal Stress BiGRU (2.44 MB)
+│   └── blaze_face_short_range.tflite       # MediaPipe face detector model
+├── logs/                                   # Verified training CSV logs
+│   ├── simclr_training_history.csv         # Phase 1 epoch-by-epoch loss log
+│   ├── rafdb_transfer_history.csv          # Phase 2 epoch-by-epoch accuracy & loss log
+│   └── temporal_training_history.csv       # Phase 3 recurrent model training history
+└── results/                                # Generated evaluation plots & matrices
+    ├── temporal/                           # Confusion matrices & smoothing comparison plots
+    └── raf_db/                             # Training accuracy & loss curves
 ```
 
 ---
 
-## 🚀 Quick Start & Usage
+## ⚡ Quickstart & Reproducibility Guide
 
 ### 1. Installation
+Clone the repository and install dependencies:
 ```bash
-git clone <repo-url>
-cd KMU-FED-2
-
-# Install required dependencies
-pip install torch torchvision numpy pandas scikit-learn matplotlib seaborn pillow mediapipe opencv-python onnx onnxruntime psutil
+git clone https://github.com/Nilkamal21/Stress-Detection.git
+cd Stress-Detection
+pip install torch torchvision opencv-python pillow pandas numpy scikit-learn seaborn matplotlib
 ```
 
-### 2. Phase 5: Run High-Speed Optimized Deployment Engine (ONNX + Adaptive Tracking)
+### 2. Run the Real-Time Webcam Demo (Local PC)
+With all pretrained checkpoints placed in `models_checkpoints/`, run live camera inference:
 ```bash
-# Option A: Run high-throughput sequence demo with 4.1x speedup (69.2 ms / 14.5 FPS on CPU):
-python inference/predict_realtime_optimized.py
+python inference/predict_realtime.py --webcam 0
+```
+* Press `q` or `ESC` to quit.
 
-# Option B: Run live interactive webcam monitor with ONNX telemetry:
-python inference/predict_realtime_optimized.py --webcam
-
-# Run multi-engine latency/throughput benchmarks & component breakdown:
-python optimization/benchmark_performance.py
+### 3. Evaluate Temporal Stress Model (Confusion Matrix)
+Run the held-out subject evaluation:
+```bash
+python evaluation/evaluate_temporal.py --data_dir ubfc_faces
 ```
 
-### 3. Phase 4: Baseline Real-Time Temporal Inference (PyTorch Engine)
+### 4. Phase 5 ONNX Optimization
+Export trained PyTorch checkpoints into standardized ONNX runtime formats:
 ```bash
-# Run baseline streaming pipeline:
-python inference/predict_realtime.py
-```
-
-### 4. Phase 3: Train & Test Temporal Stress Model (BiGRU + Smoothing)
-```bash
-# Test the 10-frame sliding window dataset generator:
-python datasets/temporal_dataset.py
-
-# Test the recurrent model architecture:
-python models/temporal_model.py
-
-# Run temporal training, held-out evaluation & Step 22 smoothing:
-python training/train_temporal.py
-```
-
-### 5. Phase 2: RAF-DB Affective Transfer Learning
-```bash
-# Stage B Fine-Tuning (Differential LR: Backbone 5e-5, Head 5e-4):
-python training/train_rafdb_transfer.py --epochs 3 --batch_size 32 --unfreeze_blocks 3
-
-# Evaluate test set metrics:
-python evaluation/evaluate_rafdb.py
-```
-
-### 6. Phase 1: Self-Supervised SimCLR Pre-Training
-```bash
-# Pre-train EfficientNet-B0 on unlabeled face crops using NT-Xent loss:
-python training/train_simclr.py --epochs 3 --batch_size 32
+python optimization/export_onnx.py
 ```
 
 ---
 
-## 📈 Visual Artifacts & Proofs
+## 📜 Scientific Methodology & Defense
 
-Key visual proofs generated by the pipeline:
-
-* **Hardware Optimization Benchmark:** [`results/optimization/optimization_comparison.png`](file:///c:/Users/kundu/OneDrive/Desktop/KMU-FED-2/results/optimization/optimization_comparison.png)  
-  *Shows multi-engine FPS comparisons and the component latency breakdown.*
-* **Turbo Real-Time Heads-Up Display:** [`results/realtime/optimized_realtime_preview.jpg`](file:///c:/Users/kundu/OneDrive/Desktop/KMU-FED-2/results/realtime/optimized_realtime_preview.jpg)  
-  *Shows real-time ONNX streaming preview across vehicle frames.*
-* **Real-Time Heads-Up Display (HUD):** [`results/realtime/realtime_preview.jpg`](file:///c:/Users/kundu/OneDrive/Desktop/KMU-FED-2/results/realtime/realtime_preview.jpg)  
-  *Shows the 3-stage visual shift from calm driving (green border) to acute stress alert (red progress bar).*
-* **Temporal Moving-Average Smoothing Filter:** [`results/temporal/temporal_smoothing_comparison.png`](file:///c:/Users/kundu/OneDrive/Desktop/KMU-FED-2/results/temporal/temporal_smoothing_comparison.png)  
-  *Demonstrates how Step 22 suppresses rapid prediction jitter by 16.9%.*
-* **RAF-DB Confusion Matrices:** [`results/raf_db/confusion_matrix_normalized.png`](file:///c:/Users/kundu/OneDrive/Desktop/KMU-FED-2/results/raf_db/confusion_matrix_normalized.png)  
-  *Full 7x7 normalized confusion matrix on 3,068 test images.*
-* **SimCLR Positive Pair Strip:** [`results/simclr_pair_preview.jpg`](file:///c:/Users/kundu/OneDrive/Desktop/KMU-FED-2/results/simclr_pair_preview.jpg)
-
----
-
-## 📖 In-Depth Documentation
-
-* [**`for_me.md`**](file:///c:/Users/kundu/OneDrive/Desktop/KMU-FED-2/for_me.md): Master beginner-friendly guide with real-world analogies (*The Portrait Artist*, *The Flipbook*, *The Park Bench*, *The Conveyor Belt*) and plain-English Q&A.
-* [**`explainable.md`**](file:///c:/Users/kundu/OneDrive/Desktop/KMU-FED-2/explainable.md): Full engineering documentation with mathematical proofs, selective unfreezing tables, loss functions, and architectural rationales.
+For an in-depth breakdown of the mathematical formulations, architectural decisions, and an exhaustive list of **Viva / Oral Defense Q&A**, please read:
+👉 **[`explanation.md`](explanation.md)**
