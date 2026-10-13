@@ -14,10 +14,15 @@ import sys
 import glob
 import time
 import argparse
+import gc
 import numpy as np
 import pandas as pd
 import cv2
 from tqdm import tqdm
+
+# CRITICAL: Prevent OpenCV multithreading heap corruption (malloc: invalid size) on Linux glibc
+cv2.setNumThreads(1)
+cv2.ocl.setUseOpenCL(False)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
@@ -28,7 +33,7 @@ def get_face_detector():
     cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     detector = cv2.CascadeClassifier(cascade_path)
     if detector.empty():
-        raise RuntimeError("Failed to load OpenCV Haar frontal face cascade.")
+        return None
     return detector
 
 
@@ -48,7 +53,7 @@ def crop_face_box(frame, bbox, margin=0.10, target_size=(224, 224)):
     y2 = min(h, y + bh + pad_h)
 
     face = frame[y1:y2, x1:x2]
-    if face.size == 0:
+    if face is None or face.size == 0 or face.shape[0] < 10 or face.shape[1] < 10:
         return None
     return cv2.resize(face, target_size, interpolation=cv2.INTER_AREA)
 
@@ -63,13 +68,13 @@ def parse_ground_truth(gt_file):
         return None
 
     try:
-        with open(gt_file, "r") as f:
+        with open(gt_file, "r", encoding="utf-8", errors="ignore") as f:
             lines = [line.strip() for line in f.readlines() if line.strip()]
 
         if len(lines) >= 3:
-            bvp = np.fromstring(lines[0], sep=" ")
-            hr = np.fromstring(lines[1], sep=" ")
-            time_stamps = np.fromstring(lines[2], sep=" ")
+            bvp = np.array([float(x) for x in lines[0].split() if x], dtype=np.float32)
+            hr = np.array([float(x) for x in lines[1].split() if x], dtype=np.float32)
+            time_stamps = np.array([float(x) for x in lines[2].split() if x], dtype=np.float32)
             return {"bvp": bvp, "hr": hr, "time": time_stamps}
     except Exception as e:
         print(f"[WARN] Error reading ground truth {gt_file}: {e}")
@@ -132,18 +137,24 @@ def extract_subject_faces(
 
             # Face detection or tracking update
             if frame_idx % (frame_stride * detect_interval) == 0 or last_bbox is None:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = detector.detectMultiScale(
-                    gray, scaleFactor=1.1, minNeighbors=4, minSize=(80, 80)
-                )
-                if len(faces) > 0:
-                    # Select largest face
-                    faces = sorted(faces, key=lambda b: b[2] * b[3], reverse=True)
-                    last_bbox = tuple(faces[0])
+                dim = int(min(h, w) * 0.70)
+                center_box = ((w - dim) // 2, (h - dim) // 2, dim, dim)
+                if detector is not None:
+                    try:
+                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        faces = detector.detectMultiScale(
+                            gray, scaleFactor=1.1, minNeighbors=4, minSize=(80, 80)
+                        )
+                        if len(faces) > 0:
+                            faces = sorted(faces, key=lambda b: b[2] * b[3], reverse=True)
+                            last_bbox = tuple(faces[0])
+                        elif last_bbox is None:
+                            last_bbox = center_box
+                    except Exception:
+                        if last_bbox is None:
+                            last_bbox = center_box
                 elif last_bbox is None:
-                    # Center fallback
-                    dim = int(min(h, w) * 0.70)
-                    last_bbox = ((w - dim) // 2, (h - dim) // 2, dim, dim)
+                    last_bbox = center_box
 
             # Crop and resize face
             face_crop = crop_face_box(frame, last_bbox, target_size=target_size)
@@ -189,6 +200,8 @@ def extract_subject_faces(
         frame_idx += 1
 
     cap.release()
+    del cap
+    gc.collect()
     return records
 
 
@@ -232,7 +245,7 @@ def find_ubfc_subject_dirs(raw_dir=None):
 def run_ubfc_extraction(
     raw_dir=None,
     output_dir=None,
-    frame_stride=1,
+    frame_stride=5,
     max_subjects=None
 ):
     """
@@ -246,7 +259,7 @@ def run_ubfc_extraction(
     if raw_dir is None:
         raw_dir = config.UBFC_RAW_DIR
     if output_dir is None:
-        output_dir = os.path.join(config.DATA_DIR, "ubfc_faces")
+        output_dir = "/kaggle/working/ubfc_faces" if os.path.exists("/kaggle") else os.path.join(config.DATA_DIR, "ubfc_faces")
 
     metadata_dir = os.path.join(config.DATA_DIR, "metadata")
     os.makedirs(output_dir, exist_ok=True)
@@ -308,7 +321,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract UBFC Face Video Frames")
     parser.add_argument("--raw_dir", type=str, default=None, help="Path to raw UBFC dataset")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory for cropped faces")
-    parser.add_argument("--frame_stride", type=int, default=1, help="Sampling stride (1=every frame)")
+    parser.add_argument("--frame_stride", type=int, default=5, help="Sampling stride (default: 5 = 6 FPS)")
     parser.add_argument("--max_subjects", type=int, default=None, help="Limit number of subjects (testing)")
     args = parser.parse_args()
 
