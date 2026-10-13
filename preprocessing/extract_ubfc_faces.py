@@ -34,12 +34,11 @@ def extract_subject_faces_ffmpeg(
     """
     subject_name = os.path.basename(subject_dir.rstrip("\\/"))
 
-    # Locate video file
-    video_candidates = (
-        glob.glob(os.path.join(subject_dir, "*.avi")) +
-        glob.glob(os.path.join(subject_dir, "*.mp4")) +
-        glob.glob(os.path.join(subject_dir, "*.mov"))
-    )
+    # Case-insensitive video file discovery
+    video_candidates = [
+        os.path.join(subject_dir, f) for f in os.listdir(subject_dir)
+        if f.lower().endswith((".avi", ".mp4", ".mov", ".mkv"))
+    ]
     if not video_candidates:
         return []
 
@@ -50,19 +49,13 @@ def extract_subject_faces_ffmpeg(
     records = []
     w_out, h_out = target_size
 
-    # Native FFmpeg filter:
+    # Native FFmpeg filter without shell quotes:
     # 1. Sample at target_fps (default: 6 FPS = plenty of temporal variation)
-    # 2. Crop central 75% face region: crop=in_h*0.75:in_h*0.75:(in_w-in_h*0.75)/2:in_h*0.08
+    # 2. Crop central 75% face region: ih*0.75
     # 3. Scale to exact target_size (224x224)
-    vf_filter = (
-        f"fps={target_fps},"
-        f"crop='min(in_w,in_h)*0.75':'min(in_w,in_h)*0.75':(in_w-min(in_w,in_h)*0.75)/2:in_h*0.08,"
-        f"scale={w_out}:{h_out}"
-    )
-
+    vf_filter = f"fps={target_fps},crop=ih*0.75:ih*0.75:(iw-ih*0.75)/2:ih*0.08,scale={w_out}:{h_out}"
     out_pattern = os.path.join(subj_out_dir, "frame_%06d.jpg")
 
-    # Check if FFmpeg is installed
     ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
 
     cmd = [
@@ -77,10 +70,12 @@ def extract_subject_faces_ffmpeg(
     try:
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if res.returncode != 0:
-            # Fallback filter if custom crop fails on weird aspect ratio
+            # Fallback simple scale filter if crop was out of bounds
             simple_vf = f"fps={target_fps},scale={w_out}:{h_out}"
-            cmd[4] = simple_vf
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            cmd[5] = simple_vf
+            res2 = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res2.returncode != 0:
+                print(f"[FFmpeg error on {subject_name}]: {res2.stderr.decode('utf-8', errors='ignore').strip()}")
 
         for fname in sorted(os.listdir(subj_out_dir)):
             if fname.lower().endswith(".jpg"):
