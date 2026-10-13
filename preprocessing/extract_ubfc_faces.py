@@ -192,6 +192,43 @@ def extract_subject_faces(
     return records
 
 
+def find_ubfc_subject_dirs(raw_dir=None):
+    """
+    Intelligently searches for directories containing video files (vid.avi, *.avi, *.mp4)
+    and ground_truth.txt. Supports flat, nested, or auto-detected Kaggle directory structures.
+    """
+    candidate_roots = []
+    if raw_dir and os.path.exists(raw_dir):
+        candidate_roots.append(raw_dir)
+
+    # Auto-scan /kaggle/input if running on Kaggle
+    if os.path.exists("/kaggle/input"):
+        # Check all immediate folders under /kaggle/input
+        for entry in os.listdir("/kaggle/input"):
+            full_e = os.path.join("/kaggle/input", entry)
+            if os.path.isdir(full_e) and "raf" not in entry.lower():
+                candidate_roots.append(full_e)
+
+    subject_dirs = []
+    for root_cand in candidate_roots:
+        for cur_root, dirs, files in os.walk(root_cand):
+            # Check if this directory contains a video file
+            has_video = any(f.lower().endswith((".avi", ".mp4")) for f in files)
+            if has_video:
+                subject_dirs.append(cur_root)
+
+    # De-duplicate while preserving order
+    seen = set()
+    unique_dirs = []
+    for d in sorted(subject_dirs):
+        norm = os.path.abspath(d)
+        if norm not in seen:
+            seen.add(norm)
+            unique_dirs.append(norm)
+
+    return unique_dirs
+
+
 def run_ubfc_extraction(
     raw_dir=None,
     output_dir=None,
@@ -219,23 +256,25 @@ def run_ubfc_extraction(
     print(f"[Output Faces Dir]    : {output_dir}")
     print(f"[Frame Stride]        : {frame_stride} (1 = all frames)")
 
-    if not os.path.exists(raw_dir):
-        print(f"\n[INFO] Raw UBFC directory not found locally at: {raw_dir}")
-        print("On Kaggle, place raw dataset at /kaggle/input/ubfc-rppg-dataset or pass --raw_dir <path>")
-        return
-
-    subject_dirs = sorted([
-        d for d in glob.glob(os.path.join(raw_dir, "*")) if os.path.isdir(d)
-    ])
+    subject_dirs = find_ubfc_subject_dirs(raw_dir)
 
     if not subject_dirs:
-        print(f"[WARN] No subject directories found in: {raw_dir}")
+        print(f"\n[INFO] No UBFC subject video directories found in: {raw_dir}")
+        if os.path.exists("/kaggle/input"):
+            print("Contents of /kaggle/input:")
+            for item in os.listdir("/kaggle/input"):
+                print(f"  - /kaggle/input/{item}")
+        print("Please check that the UBFC dataset has finished downloading and is mounted in Kaggle!")
         return
 
     if max_subjects:
         subject_dirs = subject_dirs[:max_subjects]
 
-    print(f"[Subjects Found]      : {len(subject_dirs)} subjects to process\n")
+    print(f"[Subjects Found]      : {len(subject_dirs)} subjects to process")
+    for s in subject_dirs[:3]:
+        print(f"  -> Sample: {s}")
+    if len(subject_dirs) > 3:
+        print(f"  -> ... and {len(subject_dirs) - 3} more subjects.\n")
     detector = get_face_detector()
 
     all_records = []
