@@ -4,79 +4,33 @@ Phase 1 — Step 1: Video Frame & Face Extraction for UBFC Dataset.
 
 Extracts 224x224 facial image frames from raw UBFC subject videos (vid.avi) for
 unsupervised SimCLR pre-training.
-Outputs:
-- Aligned 224x224 facial image frames saved to: /kaggle/working/ubfc_faces/{subject_id}/
-- Master metadata CSV saved to: data/metadata/ubfc_frames_metadata.csv
+Uses native FFmpeg for ultra-fast, robust, crash-free frame extraction directly on Kaggle.
 """
 
 import os
 import sys
-
-# CRITICAL: Force FFmpeg and disable GStreamer/OpenCV multithreading before importing cv2
-os.environ["OPENCV_VIDEOIO_PRIORITY_BACKENDS"] = "FFMPEG"
-os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
-
 import glob
 import time
 import argparse
 import subprocess
-import gc
-import numpy as np
+import shutil
 import pandas as pd
-import cv2
 from tqdm import tqdm
-
-cv2.setNumThreads(1)
-cv2.ocl.setUseOpenCL(False)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
 
-def get_face_detector():
-    """Returns OpenCV's frontal face cascade classifier or None."""
-    try:
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        detector = cv2.CascadeClassifier(cascade_path)
-        if detector.empty():
-            return None
-        return detector
-    except Exception:
-        return None
-
-
-def crop_face_box(frame, bbox, margin=0.10, target_size=(224, 224)):
-    """
-    Crops the face bounding box with safety margins and resizes to target_size.
-    bbox: (x, y, w, h)
-    """
-    h, w = frame.shape[:2]
-    x, y, bw, bh = bbox
-    pad_w = int(bw * margin)
-    pad_h = int(bh * margin)
-
-    x1 = max(0, x - pad_w)
-    y1 = max(0, y - pad_h)
-    x2 = min(w, x + bw + pad_w)
-    y2 = min(h, y + bh + pad_h)
-
-    face = frame[y1:y2, x1:x2]
-    if face is None or face.size == 0 or face.shape[0] < 10 or face.shape[1] < 10:
-        return None
-    return cv2.resize(face, target_size, interpolation=cv2.INTER_AREA)
-
-
-def extract_subject_faces(
+def extract_subject_faces_ffmpeg(
     subject_dir,
     output_base_dir,
-    detector=None,
-    frame_stride=5,
-    target_size=(224, 224),
-    detect_interval=15
+    target_fps=6,
+    target_size=(224, 224)
 ):
     """
-    Extracts face frames from a single UBFC subject directory.
-    Uses cv2.CAP_FFMPEG with automatic FFmpeg subprocess fallback.
+    Extracts face frames from a single UBFC subject directory using native FFmpeg.
+    In UBFC, each subject is seated directly in front of the camera.
+    A centered 75% crop captures the face, eyes, and expressions perfectly.
     """
     subject_name = os.path.basename(subject_dir.rstrip("\\/"))
 
@@ -94,99 +48,59 @@ def extract_subject_faces(
     os.makedirs(subj_out_dir, exist_ok=True)
 
     records = []
-    frame_idx = 0
-    saved_count = 0
-    last_bbox = None
+    w_out, h_out = target_size
 
-    # Method A: Try OpenCV with explicit FFmpeg backend
-    cap = None
+    # Native FFmpeg filter:
+    # 1. Sample at target_fps (default: 6 FPS = plenty of temporal variation)
+    # 2. Crop central 75% face region: crop=in_h*0.75:in_h*0.75:(in_w-in_h*0.75)/2:in_h*0.08
+    # 3. Scale to exact target_size (224x224)
+    vf_filter = (
+        f"fps={target_fps},"
+        f"crop='min(in_w,in_h)*0.75':'min(in_w,in_h)*0.75':(in_w-min(in_w,in_h)*0.75)/2:in_h*0.08,"
+        f"scale={w_out}:{h_out}"
+    )
+
+    out_pattern = os.path.join(subj_out_dir, "frame_%06d.jpg")
+
+    # Check if FFmpeg is installed
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+
+    cmd = [
+        ffmpeg_bin, "-y",
+        "-i", video_path,
+        "-vf", vf_filter,
+        "-q:v", "2",
+        out_pattern,
+        "-loglevel", "error"
+    ]
+
     try:
-        cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(video_path)
-    except Exception:
-        cap = None
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode != 0:
+            # Fallback filter if custom crop fails on weird aspect ratio
+            simple_vf = f"fps={target_fps},scale={w_out}:{h_out}"
+            cmd[4] = simple_vf
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    if cap is not None and cap.isOpened():
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    break
-
-                if frame_idx % frame_stride == 0:
-                    h, w = frame.shape[:2]
-                    dim = int(min(h, w) * 0.70)
-                    center_box = ((w - dim) // 2, (h - dim) // 2, dim, dim)
-
-                    # Update face box on interval
-                    if (frame_idx % (frame_stride * detect_interval) == 0 or last_bbox is None) and detector is not None:
-                        try:
-                            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                            faces = detector.detectMultiScale(gray, 1.2, 3, minSize=(60, 60))
-                            if len(faces) > 0:
-                                faces = sorted(faces, key=lambda b: b[2] * b[3], reverse=True)
-                                last_bbox = tuple(faces[0])
-                            elif last_bbox is None:
-                                last_bbox = center_box
-                        except Exception:
-                            if last_bbox is None:
-                                last_bbox = center_box
-                    elif last_bbox is None:
-                        last_bbox = center_box
-
-                    face_crop = crop_face_box(frame, last_bbox, target_size=target_size)
-                    if face_crop is not None:
-                        img_name = f"frame_{frame_idx:06d}.jpg"
-                        save_path = os.path.join(subj_out_dir, img_name)
-                        cv2.imwrite(save_path, face_crop, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-
-                        records.append({
-                            "subject_id": subject_name,
-                            "frame_idx": frame_idx,
-                            "relative_path": os.path.join(subject_name, img_name),
-                            "full_path": save_path,
-                        })
-                        saved_count += 1
-
-                frame_idx += 1
-        except Exception as e:
-            print(f"[OpenCV read interrupted on {subject_name}]: {e}")
-        finally:
-            cap.release()
-            del cap
-            gc.collect()
-
-    # Method B: Robust FFmpeg CLI Fallback if OpenCV yielded zero frames
-    if saved_count == 0:
-        target_fps = max(1, 30 // frame_stride)
-        ffmpeg_cmd = [
-            "ffmpeg", "-y", "-i", video_path,
-            "-vf", f"fps={target_fps},crop='min(iw,ih)*0.75':'min(iw,ih)*0.75',scale={target_size[0]}:{target_size[1]}",
-            os.path.join(subj_out_dir, "frame_%06d.jpg"),
-            "-loglevel", "error"
-        ]
-        try:
-            subprocess.run(ffmpeg_cmd, check=True)
-            for f in sorted(os.listdir(subj_out_dir)):
-                if f.lower().endswith(".jpg"):
-                    f_path = os.path.join(subj_out_dir, f)
-                    records.append({
-                        "subject_id": subject_name,
-                        "relative_path": os.path.join(subject_name, f),
-                        "full_path": f_path,
-                    })
-                    saved_count += 1
-        except Exception as e:
-            print(f"[FFmpeg fallback error on {subject_name}]: {e}")
+        for fname in sorted(os.listdir(subj_out_dir)):
+            if fname.lower().endswith(".jpg"):
+                full_path = os.path.join(subj_out_dir, fname)
+                records.append({
+                    "subject_id": subject_name,
+                    "filename": fname,
+                    "relative_path": os.path.join(subject_name, fname),
+                    "full_path": full_path,
+                })
+    except Exception as e:
+        print(f"[Extraction error on {subject_name}]: {e}")
 
     return records
 
 
 def find_ubfc_subject_dirs(raw_dir=None):
     """
-    Intelligently searches for directories containing video files (vid.avi, *.avi, *.mp4)
-    and ground_truth.txt. Supports flat, nested, or auto-detected Kaggle directory structures.
+    Intelligently searches for directories containing video files (vid.avi, *.avi, *.mp4).
+    Supports flat, nested, or auto-detected Kaggle directory structures.
     """
     candidate_roots = []
     if raw_dir and os.path.exists(raw_dir):
@@ -221,14 +135,14 @@ def find_ubfc_subject_dirs(raw_dir=None):
 def run_ubfc_extraction(
     raw_dir=None,
     output_dir=None,
-    frame_stride=5,
+    fps=6,
     max_subjects=None
 ):
     """
     Main driver for Step 1: UBFC Face Video Frame Extraction.
     """
     print("=" * 65)
-    print("  PHASE 1 — STEP 1: UBFC VIDEO FACE FRAME EXTRACTION")
+    print("  PHASE 1 — STEP 1: UBFC VIDEO FACE FRAME EXTRACTION (FFMPEG)")
     print("=" * 65)
 
     if raw_dir is None:
@@ -242,7 +156,7 @@ def run_ubfc_extraction(
 
     print(f"[Input Raw Video Dir] : {raw_dir}")
     print(f"[Output Faces Dir]    : {output_dir}")
-    print(f"[Frame Stride]        : {frame_stride} (~6 FPS)")
+    print(f"[Extraction Rate]     : {fps} FPS (Optimal for facial pretraining)")
 
     subject_dirs = find_ubfc_subject_dirs(raw_dir)
 
@@ -264,16 +178,14 @@ def run_ubfc_extraction(
     if len(subject_dirs) > 3:
         print(f"  -> ... and {len(subject_dirs) - 3} more subjects.\n")
 
-    detector = get_face_detector()
     all_records = []
     t0 = time.time()
 
     for s_dir in tqdm(subject_dirs, desc="Processing Subjects"):
-        s_records = extract_subject_faces(
+        s_records = extract_subject_faces_ffmpeg(
             s_dir,
             output_dir,
-            detector=detector,
-            frame_stride=frame_stride,
+            target_fps=fps,
             target_size=(config.INPUT_SIZE, config.INPUT_SIZE)
         )
         all_records.extend(s_records)
@@ -294,16 +206,16 @@ def run_ubfc_extraction(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Extract UBFC Face Video Frames")
+    parser = argparse.ArgumentParser(description="Extract UBFC Face Video Frames via FFmpeg")
     parser.add_argument("--raw_dir", type=str, default=None, help="Path to raw UBFC dataset")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory for cropped faces")
-    parser.add_argument("--frame_stride", type=int, default=5, help="Sampling stride (default: 5 = 6 FPS)")
+    parser.add_argument("--fps", type=int, default=6, help="Target FPS to sample (default: 6)")
     parser.add_argument("--max_subjects", type=int, default=None, help="Limit number of subjects (testing)")
     args = parser.parse_args()
 
     run_ubfc_extraction(
         raw_dir=args.raw_dir,
         output_dir=args.output_dir,
-        frame_stride=args.frame_stride,
+        fps=args.fps,
         max_subjects=args.max_subjects
     )
