@@ -101,6 +101,7 @@ def run_phase2_transfer(
     lr=1e-3,
     unfreeze_blocks=0,
     use_class_weights=True,
+    weight_power=0.5,
     rafdb_dir=None,
     max_batches=None
 ):
@@ -110,7 +111,7 @@ def run_phase2_transfer(
     print(f"  Batch size       : {batch_size}")
     print(f"  Learning rate    : {lr}")
     print(f"  Unfreeze blocks  : {unfreeze_blocks} (0 = Stage A frozen backbone)")
-    print(f"  Class weights    : {use_class_weights}")
+    print(f"  Class weights    : {use_class_weights} (power={weight_power})")
     print(f"  RAF-DB dir       : {rafdb_dir or 'Auto (Kaggle/data)'}")
     print(f"  Classes          : {RAFDB_NUM_CLASSES} (Surprise..Neutral)")
     print("=" * 65)
@@ -182,13 +183,16 @@ def run_phase2_transfer(
     test_loader = get_rafdb_dataloader(split="test", root_dir=test_root, batch_size=batch_size, shuffle=False)
 
     if use_class_weights:
-        # Inverse class frequency weights to balance rare emotions (Fear, Disgust, Anger)
+        # Smoothed inverse class frequency weights to balance rare emotions without destabilizing gradients
         counts = [1290, 281, 717, 4772, 1982, 705, 2524]
         total_c = sum(counts)
-        raw_weights = [total_c / (len(counts) * c) for c in counts]
-        class_weights = torch.tensor(raw_weights, dtype=torch.float).to(device)
+        raw_weights = [(total_c / (len(counts) * c)) ** weight_power for c in counts]
+        mean_w = sum(raw_weights) / len(raw_weights)
+        norm_weights = [w / mean_w for w in raw_weights]
+        class_weights = torch.tensor(norm_weights, dtype=torch.float).to(device)
         criterion = nn.CrossEntropyLoss(weight=class_weights)
-        print("[Weights] Applied inverse class-frequency weights to CrossEntropyLoss.")
+        weights_str = ", ".join([f"{w:.2f}" for w in norm_weights])
+        print(f"[Weights] Applied smoothed class-frequency weights (power={weight_power}): [{weights_str}]")
     else:
         criterion = nn.CrossEntropyLoss().to(device)
 
@@ -206,7 +210,6 @@ def run_phase2_transfer(
 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=2)
 
-    best_test_acc = 0.0
     history = []
     best_model_path = os.path.join(config.CHECKPOINTS_DIR, "best_rafdb_affective_model.pth")
     history_csv = os.path.join(config.LOGS_DIR, "rafdb_transfer_history.csv")
@@ -274,6 +277,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate (default: 1e-3)")
     parser.add_argument("--unfreeze_blocks", type=int, default=0, help="Number of encoder blocks to unfreeze")
     parser.add_argument("--no_class_weights", action="store_true", help="Disable class weights")
+    parser.add_argument("--weight_power", type=float, default=0.5, help="Exponent for inverse class frequency (0.5=square root smoothed, 1.0=full inverse)")
     parser.add_argument("--rafdb_dir", type=str, default=None, help="Root folder of RAF-DB (containing train/test)")
     parser.add_argument("--max_batches", type=int, default=None, help="Debug max batches per epoch")
     args = parser.parse_args()
@@ -284,6 +288,7 @@ if __name__ == "__main__":
         lr=args.lr,
         unfreeze_blocks=args.unfreeze_blocks,
         use_class_weights=not args.no_class_weights,
+        weight_power=args.weight_power,
         rafdb_dir=args.rafdb_dir,
         max_batches=args.max_batches,
     )
