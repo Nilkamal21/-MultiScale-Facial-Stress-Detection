@@ -197,7 +197,8 @@ def train_temporal_model(
     stride=2,
     baseline_seconds=30.0,
     fps=6.0,
-    dropout=0.3
+    dropout=0.4,
+    weight_decay=0.01
 ):
     print("=" * 65)
     print("  Phase 3 — Temporal Stress Sequence Modeling (Steps 18–22)")
@@ -207,6 +208,7 @@ def train_temporal_model(
     print(f"  Window Size        : {window_size} frames")
     print(f"  Training Stride    : {stride}")
     print(f"  GRU Hidden Dim     : {hidden_dim} (Bidirectional + Temporal Attention)")
+    print(f"  Dropout / Decay    : {dropout} / {weight_decay}")
     print(f"  Baseline Cutoff    : {baseline_seconds}s at {fps} FPS")
     print("=" * 65)
 
@@ -259,7 +261,7 @@ def train_temporal_model(
     print(f"[Class Weights] Calm (0): {w_calm:.2f} | Stress (1): {w_stress:.2f}")
 
     criterion = nn.CrossEntropyLoss(weight=weight_tensor)
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=3)
 
     best_val_f1 = 0.0
@@ -429,6 +431,8 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
     parser.add_argument("--hidden_dim", type=int, default=128, help="GRU hidden dimension")
+    parser.add_argument("--dropout", type=float, default=0.4, help="Dropout rate")
+    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for regularization")
     parser.add_argument("--window_size", type=int, default=10, help="Window size (frames)")
     parser.add_argument("--stride", type=int, default=2, help="Window stride for train")
     parser.add_argument("--baseline_seconds", type=float, default=30.0, help="Baseline duration in seconds")
@@ -445,6 +449,8 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         lr=args.lr,
         hidden_dim=args.hidden_dim,
+        dropout=args.dropout,
+        weight_decay=args.weight_decay,
         window_size=args.window_size,
         stride=args.stride,
         baseline_seconds=args.baseline_seconds,
