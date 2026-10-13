@@ -1,6 +1,6 @@
-# Comprehensive Implementation & Technical Defense Guide: Cross-Domain Self-Supervised Affect & Stress Inference Pipeline
+# Cross-Domain Self-Supervised Adaptation Pipeline for Facial Affect & Temporal Stress Inference: Research Reference & Methodology Guide
 
-This document is the master technical reference for the **Cross-Domain Self-Supervised Adaptation Pipeline**. It details the exact motivation, mathematical foundations, data engineering, training progression, and architectural decisions across all 5 phases, followed by an exhaustive **Viva / Oral Defense Q&A** section designed for project examinations and technical reviews.
+This document is the master technical and architectural reference for our research on **Cross-Domain Self-Supervised Adaptation for Facial Affect and Temporal Stress Modeling**. It provides the complete mathematical foundations, data engineering protocols, multi-stage training progression, and a comprehensive **Research Methodology & Technical FAQ** covering the core inquiries and design decisions of the project.
 
 ---
 
@@ -15,7 +15,7 @@ This document is the master technical reference for the **Cross-Domain Self-Supe
 5. [Phase 4: Real-Time Streaming & HUD Deployment](#5-phase-4-real-time-streaming--hud-deployment)
 6. [Phase 5: Model Optimization, ONNX & Edge Inference](#6-phase-5-model-optimization-onnx--edge-inference)
 7. [Verified Experimental Results Summary](#7-verified-experimental-results-summary)
-8. [Comprehensive Viva / Defense Q&A (25 Essential Questions)](#8-comprehensive-viva--defense-qa)
+8. [Research Methodology & Technical FAQ (25 Core Inquiries)](#8-research-methodology--technical-faq)
 
 ---
 
@@ -189,7 +189,7 @@ Model temporal relationships across continuous video frame sequences to predict 
 
 ---
 
-## 8. Comprehensive Viva / Defense Q&A
+## 8. Research Methodology & Technical FAQ
 
 ### Q1: What is the core innovation of your project?
 > **Answer:** Rather than treating stress detection as a static image problem or compressing video into 1D pulse signals, our framework implements a 3-tier cross-domain adaptation ladder: self-supervised pretraining on unlabeled video (SimCLR) $\to$ affective transfer learning on 7 emotions (RAF-DB) $\to$ temporal sequence modeling on clinical stress videos (BiGRU + Temporal Attention). This achieves a completely contactless, camera-only stress detection system that generalizes to unseen subjects.

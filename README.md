@@ -156,7 +156,7 @@ python optimization/export_onnx.py
 
 ---
 
-## 📜 Scientific Methodology & Defense
+## 📜 Scientific Methodology & Technical Documentation
 
-For an in-depth breakdown of the mathematical formulations, architectural decisions, and an exhaustive list of **Viva / Oral Defense Q&A**, please read:
+For an in-depth breakdown of the mathematical formulations, architectural decisions, and an exhaustive list of **Research Methodology & Technical FAQs (25 Core Inquiries)**, please read:
 👉 **[`explanation.md`](explanation.md)**
