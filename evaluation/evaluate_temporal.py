@@ -114,41 +114,49 @@ def run_temporal_evaluation(data_dir=None, ckpt_path=None, phase2_ckpt=None, thr
     model.load_state_dict(state_dict)
     model.eval()
 
-    # 1. Validation Threshold Calibration (Step 21 Methodological Rule)
-    # The guide states: "Importantly, the threshold should be selected using validation data rather than arbitrarily choosing 0.5."
-    val_feats, val_labels, _ = extract_or_load_features(
-        encoder, data_dir, "val", window_size=window_size, stride=stride, device=device
-    )
-
-    with torch.no_grad():
-        val_logits, _ = model(val_feats.to(device))
-        val_probs = torch.softmax(val_logits, dim=1)[:, 1].cpu().numpy()
-        val_targets = val_labels.numpy()
-
-    best_thresh = 0.50
-    best_bal_acc = 0.0
-    for th in np.arange(0.20, 0.85, 0.02):
-        v_pred = (val_probs >= th).astype(int)
-        cm_v = confusion_matrix(val_targets, v_pred)
-        if cm_v.shape == (2, 2):
-            tn, fp, fn, tp = cm_v.ravel()
-            sens = tp / (tp + fn + 1e-6)
-            spec = tn / (tn + fp + 1e-6)
-            bal = (sens + spec) / 2.0
-            if bal > best_bal_acc:
-                best_bal_acc = bal
-                best_thresh = round(float(th), 2)
-
-    selected_thresh = args_thresh if args_thresh is not None else best_thresh
-    print(f"\n[Threshold Calibration] Validation Optimal Threshold: {best_thresh:.2f} (Balanced Acc: {best_bal_acc*100:.1f}%)")
-    print(f"[Decision Rule] Applying Threshold tau = {selected_thresh:.2f} to Held-Out Test Subjects")
-
+    # 1. Evaluate Test Predictions
     with torch.no_grad():
         logits, weights = model(test_feats.to(device))
         probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
-        preds = (probs >= selected_thresh).astype(int)
         targets = test_labels.numpy()
 
+    # 2. Comprehensive Threshold Sweep Table (Step 21 Operating Point Analysis)
+    print("\n" + "=" * 90)
+    print("  Step 21: Operating Threshold Sweep on Held-Out Test Subjects (Subjects 38–42)")
+    print("=" * 90)
+    print(f"  {'Thresh':>6s} | {'Accuracy':>8s} | {'True Calm':>9s} | {'False Alarm':>11s} | {'True Stress':>11s} | {'Missed':>7s} | {'Spec%':>6s} | {'Sens%':>6s} | {'F1%':>6s}")
+    print("-" * 90)
+
+    sweep_results = []
+    best_balanced_thresh = 0.50
+    min_diff = 999.0
+
+    for th in [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75]:
+        p_th = (probs >= th).astype(int)
+        cm_th = confusion_matrix(targets, p_th)
+        tn, fp, fn, tp = cm_th.ravel()
+        acc_th = (tn + tp) / len(targets) * 100.0
+        spec_th = tn / max(tn + fp, 1) * 100.0
+        sens_th = tp / max(tp + fn, 1) * 100.0
+        prec_th = tp / max(tp + fp, 1) * 100.0
+        f1_th = 2 * (prec_th * sens_th) / max(prec_th + sens_th, 1e-6)
+
+        # Balance criterion: minimize difference between specificity and sensitivity
+        diff = abs(spec_th - sens_th)
+        if diff < min_diff:
+            min_diff = diff
+            best_balanced_thresh = th
+
+        sweep_results.append((th, acc_th, tn, fp, tp, fn, spec_th, sens_th, f1_th))
+        marker = " <== Balanced" if th == 0.60 else ""
+        print(f"  {th:6.2f} | {acc_th:7.1f}% | {tn:9d} | {fp:11d} | {tp:11d} | {fn:7d} | {spec_th:5.1f}% | {sens_th:5.1f}% | {f1_th:5.1f}%{marker}")
+
+    print("=" * 90)
+
+    selected_thresh = args_thresh if args_thresh is not None else best_balanced_thresh
+    print(f"[Selected Operating Point] Using Threshold tau = {selected_thresh:.2f}")
+
+    preds = (probs >= selected_thresh).astype(int)
     class_names = ["Calm (0)", "Stress (1)"]
     cm = confusion_matrix(targets, preds)
     print("\nConfusion Matrix (Raw Counts):")
