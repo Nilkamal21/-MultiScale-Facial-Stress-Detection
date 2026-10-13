@@ -67,21 +67,31 @@ class RealtimeTemporalStressPipeline:
         self.phase2_model = self.phase2_model.to(self.device).eval()
 
         # 2. Recurrent Temporal Model (Phase 3 GRU)
+        phase3_ckpt = os.path.join(config.CHECKPOINTS_DIR, "best_temporal_stress_model.pth")
+        hidden_dim = 64
+        t_state_dict = None
+
+        if os.path.exists(phase3_ckpt):
+            print(f"[Phase 3 Model] Loading: {phase3_ckpt}")
+            ckpt = torch.load(phase3_ckpt, map_location=self.device, weights_only=False)
+            t_state_dict = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
+            if "gru.weight_ih_l0" in t_state_dict:
+                hidden_dim = t_state_dict["gru.weight_ih_l0"].shape[0] // 3
+            else:
+                hidden_dim = ckpt.get("hidden_dim", 64)
+            print(f"[OK] Detected hidden_dim={hidden_dim} from Phase 3 checkpoint.")
+        else:
+            print("[WARN] Phase 3 temporal checkpoint not found! Using initialized weights.")
+
         self.temporal_gru = TemporalStressGRU(
             input_dim=self.encoder.feature_dim,
-            hidden_dim=128,
+            hidden_dim=hidden_dim,
             num_layers=2,
             num_classes=2,
             bidirectional=True
         )
-
-        phase3_ckpt = os.path.join(config.CHECKPOINTS_DIR, "best_temporal_stress_model.pth")
-        if os.path.exists(phase3_ckpt):
-            print(f"[Phase 3 Model] Loading: {phase3_ckpt}")
-            ckpt = torch.load(phase3_ckpt, map_location=self.device, weights_only=False)
-            self.temporal_gru.load_state_dict(ckpt["model_state_dict"])
-        else:
-            print("[WARN] Phase 3 temporal checkpoint not found! Using initialized weights.")
+        if t_state_dict is not None:
+            self.temporal_gru.load_state_dict(t_state_dict)
 
         self.temporal_gru = self.temporal_gru.to(self.device).eval()
 

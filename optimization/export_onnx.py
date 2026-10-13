@@ -157,23 +157,32 @@ def export_temporal_stress_model(output_path):
     print("=" * 65)
 
     device = torch.device("cpu")
-    model = TemporalStressGRU(
-        input_dim=1280,
-        hidden_dim=128,
-        num_layers=2,
-        num_classes=2,
-        bidirectional=True
-    )
-
     ckpt_path = os.path.join(config.CHECKPOINTS_DIR, "best_temporal_stress_model.pth")
+    hidden_dim = 64
+    state_dict = None
+
     if os.path.exists(ckpt_path):
         print(f"[Loading] Checkpoint: {ckpt_path}")
         ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
         state_dict = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
-        model.load_state_dict(state_dict)
-        print("[OK] Loaded Phase 3 temporal stress weights.")
+        if "gru.weight_ih_l0" in state_dict:
+            hidden_dim = state_dict["gru.weight_ih_l0"].shape[0] // 3
+        else:
+            hidden_dim = ckpt.get("hidden_dim", 64)
+        print(f"[OK] Detected hidden_dim={hidden_dim} from Phase 3 checkpoint.")
     else:
         print("[WARN] Checkpoint not found! Exporting with initialized weights.")
+
+    model = TemporalStressGRU(
+        input_dim=1280,
+        hidden_dim=hidden_dim,
+        num_layers=2,
+        num_classes=2,
+        bidirectional=True
+    )
+    if state_dict is not None:
+        model.load_state_dict(state_dict)
+        print("[OK] Loaded Phase 3 temporal stress weights.")
 
     wrapper = TemporalStressGRUSingleOutput(model).to(device).eval()
 
