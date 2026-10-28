@@ -1,15 +1,27 @@
 {
-  "test_accuracy": 54.72,
-  "test_precision": 56.87,
-  "test_recall": 83.33,
-  "test_f1": 67.61,
-  "test_roc_auc": 57.74,
-  "raw_jitter": 0.0364,
-  "smoothed_jitter": 0.0238,
-  "jitter_reduction_percent": 34.62,
+  "model_architecture": "85-Region Spatial Pyramid Pooling (1x1, 2x2, 4x4, 8x8) + Bidirectional GRU (Hidden: 64)",
+  "threshold": 0.5,
+  "test_accuracy": 54.33,
+  "test_precision": 61.38,
+  "test_recall": 52.43,
+  "test_specificity": 56.82,
+  "test_f1": 56.55,
+  "test_roc_auc": 53.03,
+  "true_calm": 125,
+  "false_alarm": 95,
+  "missed_stress": 137,
+  "true_stress": 151,
+  "raw_jitter": 0.0222,
+  "smoothed_jitter": 0.0132,
+  "jitter_reduction_percent": 40.7,
   "window_size": 10,
   "smoothing_k": 3,
-  "train_windows": 4784,
-  "val_windows": 508,
-  "test_windows": 508
+  "total_test_windows": 508,
+  "held_out_subjects": [
+    "subject38",
+    "subject39",
+    "subject40",
+    "subject41",
+    "subject42"
+  ]
 }

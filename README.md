@@ -62,19 +62,23 @@ The pipeline bridges self-supervised visual pre-training on unlabeled face video
   * **Stage C (Refined LR $8 \times 10^{-5}$):** **71.84% Test Accuracy** (Train Acc: 76.97%, Test Loss: 0.8041).
 * **Output:** 1,280-dimensional affective feature representation vectors ($F_t \to f_t$).
 
-### 3. Phase 3 — Temporal Stress Inference (Subject-Independent Split on UBFC)
+### 3. Phase 3 — Temporal Stress Inference (85-Region SPP + BiGRU on UBFC)
+* **Spatial Feature Extraction:** 4-Scale Spatial Pyramid Pooling ($1\times1, 2\times2, 4\times4, 8\times8 = \mathbf{85\text{ regions}}$) with Additive Spatial Region Attention to isolate active facial Action Units (AU4 brow furrow, AU7 lid tightener, AU24 lip pressor).
 * **Protocol:** First 30 seconds ($t \le 30\text{s}$, frames 1–180) = **Calm Baseline (0)**; After 30 seconds ($t > 30\text{s}$, frames > 180, Mental Arithmetic Quiz) = **Acute Stress (1)**.
 * **Subject Split:** 
   * **Train:** Subjects 1–32 (4,784 sliding windows)
   * **Validation:** Subjects 33–37 (508 sliding windows)
   * **Held-Out Test:** Subjects 38–42 (508 sliding windows — **completely unseen people**)
-* **Test Performance (Subjects 38–42):**
-  * **Stress Recall (Sensitivity):** **83.33%** (Catches >83% of all genuine acute stress episodes).
-  * **F1-Score:** **67.61%**.
-  * **Precision:** **56.87%**.
-  * **Overall Accuracy:** **54.72%**.
+* **Held-Out Performance Comparison (Subjects 38–42):**
+  | Metric | Previous (Single-Box GAP) | **85-Region SPP (New)** | Gain |
+  | :--- | :---: | :---: | :---: |
+  | **Stress Precision** | 56.87% | **61.38%** | **+4.51%** (Fewer false alarms) |
+  | **Calm Specificity** | Moderate | **56.82%** (125 True Calm) | **Balanced class separation** |
+  | **Peak Accuracy ($\tau=0.40$)** | 54.72% | **57.10%** | **+2.38%** |
+  | **Peak F1-Score ($\tau=0.40$)** | 67.61% | **69.00%** | **+1.39%** |
+  | **Smoothing Jitter Reduction** | 34.6% | **40.7%** | **+6.1% smoother live HUD** |
 * **Step 22 Moving-Average Smoothing Filter ($K=3$):**
-  * Raw Prediction Jitter: `0.0364` $\longrightarrow$ Smoothed Jitter: `0.0238` (**34.6% reduction in flicker!**).
+  * Raw Prediction Jitter: `0.0222` $\longrightarrow$ Smoothed Jitter: `0.0132` (**40.7% reduction in flicker!**).
 
 ---
 

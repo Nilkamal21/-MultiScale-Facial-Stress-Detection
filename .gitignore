@@ -3,13 +3,15 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Data & Large checkpoints
+# Data & Video files
 data/
 *.npz
-*.pth
 *.7z
 *.zip
 *.avi
+
+# Keep checkpoints folder tracked
+!models_checkpoints/*.pth
 
 # Environments
 .vscode/
