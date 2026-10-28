@@ -91,7 +91,8 @@ def load_phase2_feature_extractor(ckpt_path=None, device="cuda"):
                 break
 
     if not loaded:
-        print("[WARN] No checkpoint found. Using initialized EfficientNet backbone.")
+        print("[WARN] No fine-tuned checkpoint found! Loading ImageNet-pretrained EfficientNet-B0 with 85-Region SPP...")
+        full_model.encoder = EfficientNetEncoder(pretrained=True, use_spp=True)
 
     full_model = full_model.to(device)
     full_model.eval()
