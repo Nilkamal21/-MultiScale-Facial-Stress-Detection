@@ -5,7 +5,7 @@ Phase 3 (Temporal Stress Inference) — Steps 20 & 21: Recurrent Temporal Model.
 Models temporal relationships across video frame sequences using a Gated Recurrent Unit (GRU)
 with Temporal Attention Pooling to detect dynamic micro-expressions and stress patterns:
     [f_1, f_2, ..., f_W] -> Bidirectional GRU -> Temporal Attention -> Stress Classifier.
-Provides both standalone feature-sequence GRU and End-to-End temporal models.
+Supports 85-Region Multi-Scale Spatial Pyramid features and End-to-End inference.
 """
 
 import os
@@ -108,35 +108,42 @@ class TemporalStressGRU(nn.Module):
 class EndToEndTemporalStressModel(nn.Module):
     """
     Full end-to-end inference pipeline:
-    Raw Temporal Video Windows [B, W, 3, 224, 224] -> CNN Backbone -> GRU -> Stress Logits [B, 2].
+    Raw Temporal Video Windows [B, W, 3, 224, 224] -> CNN Backbone (85-Region SPP) -> GRU -> Stress Logits [B, 2].
     """
     def __init__(self, visual_encoder, temporal_rnn):
         super().__init__()
         self.encoder = visual_encoder
         self.temporal_rnn = temporal_rnn
 
-    def forward(self, video_tensor):
+    def forward(self, video_tensor, return_spatial_attention=False):
         """
         Args:
             video_tensor: Shape (batch_size, window_size, 3, 224, 224)
+            return_spatial_attention: bool, whether to return 85-region attention weights
         Returns:
             logits: (batch_size, num_classes)
-            attention_weights: (batch_size, window_size, 1)
+            temporal_weights: (batch_size, window_size, 1)
+            (Optional) spatial_weights: (batch_size, window_size, 85, 1)
         """
         b, w, c, h, d = video_tensor.shape
-        # Flatten temporal dimension into batch for parallel CNN feature extraction
         flat_frames = video_tensor.view(b * w, c, h, d)
-        features = self.encoder(flat_frames)  # shape: (b * w, 1280)
-        # Reshape back to temporal sequence
-        seq_features = features.view(b, w, -1)  # shape: (b, w, 1280)
-        logits, weights = self.temporal_rnn(seq_features)
-        return logits, weights
+
+        if return_spatial_attention:
+            features, spatial_weights = self.encoder(flat_frames, return_attention=True)
+            seq_features = features.view(b, w, -1)
+            logits, temp_weights = self.temporal_rnn(seq_features)
+            return logits, temp_weights, spatial_weights.view(b, w, 85, 1)
+        else:
+            features = self.encoder(flat_frames)
+            seq_features = features.view(b, w, -1)
+            logits, temp_weights = self.temporal_rnn(seq_features)
+            return logits, temp_weights
 
 
 def run_temporal_model_test():
     """Standalone diagnostic verifying Step 3.2 model architecture."""
     print("=" * 65)
-    print("  Phase 3 (Step 3.2) — Recurrent Temporal Model (GRU + Attention)")
+    print("  Phase 3 — Recurrent Temporal Model (GRU + Temporal & Spatial Attention)")
     print("=" * 65)
 
     batch_size = 4
@@ -156,18 +163,20 @@ def run_temporal_model_test():
     weight_sums = weights.sum(dim=1).squeeze(-1)
     print(f"[Attention Sums (==1.0)]: {weight_sums.tolist()}")
 
-    # Test End-to-End wrapper
-    encoder = EfficientNetEncoder(pretrained=False)
+    # Test End-to-End wrapper with 85-Region SPP Encoder
+    encoder = EfficientNetEncoder(pretrained=False, use_spp=True)
     e2e_model = EndToEndTemporalStressModel(visual_encoder=encoder, temporal_rnn=model)
 
     dummy_video = torch.randn(2, 5, 3, 224, 224)
     with torch.no_grad():
-        e2e_logits, e2e_weights = e2e_model(dummy_video)
+        e2e_logits, e2e_temp_weights, e2e_spatial_weights = e2e_model(dummy_video, return_spatial_attention=True)
 
     print(f"[End-to-End Input]      : {list(dummy_video.shape)} [Batch, Window, C, H, W]")
     print(f"[End-to-End Output]     : {list(e2e_logits.shape)}")
+    print(f"[Temporal Attn Weights] : {list(e2e_temp_weights.shape)} [Batch, Window, 1]")
+    print(f"[Spatial Attn (85 Regs)]: {list(e2e_spatial_weights.shape)} [Batch, Window, 85, 1]")
     print("=" * 65)
-    print("[SUCCESS] Step 3.2 Recurrent Temporal Model verified!")
+    print("[SUCCESS] Recurrent Temporal Model + 85-Region SPP verified!")
 
 
 if __name__ == "__main__":

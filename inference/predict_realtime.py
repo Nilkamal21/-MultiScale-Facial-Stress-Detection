@@ -60,7 +60,7 @@ class RealtimeTemporalStressPipeline:
             print(f"[Phase 2 Model] Loading: {phase2_ckpt}")
             ckpt = torch.load(phase2_ckpt, map_location=self.device, weights_only=False)
             state_dict = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
-            self.phase2_model.load_state_dict(state_dict)
+            self.phase2_model.load_state_dict(state_dict, strict=False)
         else:
             print("[WARN] Phase 2 model checkpoint not found! Using initialized weights.")
 

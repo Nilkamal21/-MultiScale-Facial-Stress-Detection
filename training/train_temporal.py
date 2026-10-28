@@ -70,7 +70,7 @@ def load_phase2_feature_extractor(ckpt_path=None, device="cuda"):
             print(f"[Phase 2 Model] Loading checkpoint: {p}")
             ckpt = torch.load(p, map_location=device, weights_only=False)
             state_dict = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
-            full_model.load_state_dict(state_dict)
+            full_model.load_state_dict(state_dict, strict=False)
             print("[OK] Successfully loaded Phase 2 fine-tuned affective backbone!")
             loaded = True
             break
@@ -85,7 +85,7 @@ def load_phase2_feature_extractor(ckpt_path=None, device="cuda"):
         for p1 in p1_candidates:
             if os.path.exists(p1):
                 print(f"[Phase 1 Model] Loading checkpoint: {p1}")
-                full_model.encoder.load_state_dict(torch.load(p1, map_location=device, weights_only=False))
+                full_model.encoder.load_state_dict(torch.load(p1, map_location=device, weights_only=False), strict=False)
                 print("[OK] Loaded Phase 1 self-supervised backbone!")
                 loaded = True
                 break
