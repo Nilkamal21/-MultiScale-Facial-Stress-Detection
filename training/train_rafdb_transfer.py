@@ -154,7 +154,10 @@ def run_phase2_transfer(
 
     if unfreeze_blocks == 0:
         model.freeze_encoder()
-        print("[Stage A] Encoder is 100% frozen. Training only the 7-class classifier head.")
+        if hasattr(model.encoder, "spp") and model.encoder.spp is not None:
+            for p in model.encoder.spp.parameters():
+                p.requires_grad = True
+        print("[Stage A] Backbone features frozen; 85-Region SPP Attention + Classifier Head trainable.")
     else:
         # Load Stage A trained weights first so head is already initialized!
         if os.path.exists(best_model_path):
