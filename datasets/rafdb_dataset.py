@@ -65,21 +65,38 @@ class RAFDBDataset(Dataset):
         super().__init__()
         self.split = split
         if root_dir is None:
-            # Check Kaggle candidate directories first
-            candidates = [
-                os.path.join(config.DATA_DIR, "DATASET", split),
-                f"/kaggle/input/raf-db-dataset/DATASET/{split}",
-                f"/kaggle/input/rafdb/DATASET/{split}",
-                f"/kaggle/input/raf-db/DATASET/{split}",
-                f"/kaggle/input/raf-db-dataset/raf-basic/{split}",
-            ]
-            for c in candidates:
-                if os.path.exists(c):
-                    root_dir = c
-                    break
+            # 1. Search dynamically across /kaggle/input for the RAF-DB split
+            if os.path.exists("/kaggle/input"):
+                for root, dirs, _ in os.walk("/kaggle/input"):
+                    if os.path.basename(root).lower() == split.lower():
+                        # Verify it has numeric emotion folders (1..7)
+                        if any(str(i) in dirs for i in range(1, 8)):
+                            root_dir = root
+                            break
+                    elif "dataset" in os.path.basename(root).lower() and split in dirs:
+                        candidate = os.path.join(root, split)
+                        if any(str(i) in os.listdir(candidate) for i in range(1, 8) if os.path.isdir(os.path.join(candidate, str(i)))):
+                            root_dir = candidate
+                            break
+
+            # 2. Check standard candidate directories
+            if root_dir is None:
+                candidates = [
+                    f"/kaggle/input/raf-db-dataset/DATASET/{split}",
+                    f"/kaggle/input/rafdb/DATASET/{split}",
+                    f"/kaggle/input/raf-db/DATASET/{split}",
+                    f"/kaggle/input/raf-db-dataset/raf-basic/{split}",
+                    os.path.join(config.DATA_DIR, "DATASET", split),
+                ]
+                for c in candidates:
+                    if os.path.exists(c):
+                        root_dir = c
+                        break
+
             if root_dir is None:
                 root_dir = os.path.join(config.DATA_DIR, "DATASET", split)
 
+        print(f"[RAF-DB Dataset] Using {split.upper()} directory: {root_dir}")
         self.root_dir = root_dir
 
         self.transform = transform if transform is not None else get_rafdb_transforms(split)

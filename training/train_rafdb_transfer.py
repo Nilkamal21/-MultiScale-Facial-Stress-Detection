@@ -180,8 +180,17 @@ def run_phase2_transfer(
     print(f"[Parameters] Total: {total_p:,} | Trainable: {trainable_p:,}")
 
     # 4. DataLoaders & Criterion
-    train_root = os.path.join(rafdb_dir, "train") if rafdb_dir else None
-    test_root = os.path.join(rafdb_dir, "test") if rafdb_dir else None
+    train_root, test_root = None, None
+    if rafdb_dir:
+        if os.path.exists(os.path.join(rafdb_dir, "DATASET", "train")):
+            train_root = os.path.join(rafdb_dir, "DATASET", "train")
+            test_root = os.path.join(rafdb_dir, "DATASET", "test")
+        elif os.path.exists(os.path.join(rafdb_dir, "train")):
+            train_root = os.path.join(rafdb_dir, "train")
+            test_root = os.path.join(rafdb_dir, "test")
+        else:
+            train_root = rafdb_dir
+            test_root = rafdb_dir
     train_loader = get_rafdb_dataloader(split="train", root_dir=train_root, batch_size=batch_size, shuffle=True)
     test_loader = get_rafdb_dataloader(split="test", root_dir=test_root, batch_size=batch_size, shuffle=False)
 
