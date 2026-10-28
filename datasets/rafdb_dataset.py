@@ -138,8 +138,8 @@ class RAFDBDataset(Dataset):
         return counts
 
 
-def get_rafdb_dataloader(split="train", root_dir=None, batch_size=32, shuffle=None, num_workers=0):
-    """Factory function returning a DataLoader for RAF-DB training or evaluation."""
+def get_rafdb_dataloader(split="train", root_dir=None, batch_size=64, shuffle=None, num_workers=2):
+    """Factory function returning a fast parallel DataLoader for RAF-DB."""
     if shuffle is None:
         shuffle = (split == "train")
 
@@ -149,6 +149,7 @@ def get_rafdb_dataloader(split="train", root_dir=None, batch_size=32, shuffle=No
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
         drop_last=(split == "train")
     )
 

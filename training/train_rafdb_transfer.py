@@ -29,10 +29,9 @@ from datasets.rafdb_dataset import (
 )
 
 
-def train_one_epoch(model, dataloader, criterion, optimizer, device, max_batches=None):
-    """Executes one training epoch on RAF-DB face batches."""
+def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch=1, epochs=5, max_batches=None):
+    """Executes one training epoch on RAF-DB face batches with visible progress."""
     model.train()
-    # If backbone is frozen, keep encoder in eval mode to preserve BatchNorm stats
     if not any(p.requires_grad for p in model.encoder.parameters()):
         model.encoder.eval()
 
@@ -40,13 +39,14 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, max_batches
     all_preds = []
     all_labels = []
     total_batches = 0
+    num_batches = len(dataloader) if max_batches is None else min(len(dataloader), max_batches)
 
     for idx, (images, labels) in enumerate(dataloader):
         if max_batches and idx >= max_batches:
             break
 
-        images = images.to(device)
-        labels = labels.to(device)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad()
         logits = model(images)
@@ -59,6 +59,10 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, max_batches
         all_preds.extend(preds)
         all_labels.extend(labels.detach().cpu().numpy())
         total_batches += 1
+
+        if (idx + 1) % 40 == 0 or (idx + 1) == num_batches:
+            batch_acc = (np.array(all_preds[-128:]) == np.array(all_labels[-128:])).mean() * 100.0 if all_labels else 0.0
+            print(f"  [Epoch {epoch}/{epochs}] Batch {idx + 1:3d}/{num_batches:3d} | Loss: {running_loss / total_batches:.4f} | Acc: {batch_acc:4.1f}%", flush=True)
 
     epoch_loss = running_loss / max(total_batches, 1)
     epoch_acc = accuracy_score(all_labels, all_preds) * 100.0 if all_labels else 0.0
@@ -97,7 +101,7 @@ def evaluate(model, dataloader, criterion, device, max_batches=None):
 
 def run_phase2_transfer(
     epochs=5,
-    batch_size=32,
+    batch_size=64,
     lr=1e-3,
     unfreeze_blocks=0,
     use_class_weights=True,
@@ -232,7 +236,7 @@ def run_phase2_transfer(
         t_start = time.time()
 
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, criterion, optimizer, device, max_batches=max_batches
+            model, train_loader, criterion, optimizer, device, epoch=epoch, epochs=epochs, max_batches=max_batches
         )
         test_loss, test_acc, _, _ = evaluate(
             model, test_loader, criterion, device, max_batches=max_batches
@@ -285,7 +289,7 @@ def run_phase2_transfer(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 2 RAF-DB Transfer Learning")
     parser.add_argument("--epochs", type=int, default=3, help="Training epochs (default: 3)")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size (default: 32)")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size (default: 32)")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate (default: 1e-3)")
     parser.add_argument("--unfreeze_blocks", type=int, default=0, help="Number of encoder blocks to unfreeze")
     parser.add_argument("--no_class_weights", action="store_true", help="Disable class weights")
