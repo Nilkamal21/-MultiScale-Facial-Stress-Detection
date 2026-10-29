@@ -130,6 +130,11 @@ class RealtimeTemporalStressPipeline:
             else:
                 print(f"[Face Detector] Face detector fallback active ({e}).")
 
+        # 6. Smoothers for Heatmap & Tracking Stability
+        self.smooth_heatmap = None
+        self.smooth_bbox = None
+        self.current_target_class = None
+
         print(f"[Pipeline] Initialized on {self.device} (Buffer={window_size}, SmoothK={smooth_k})")
 
     def detect_face(self, frame_bgr):
@@ -199,8 +204,22 @@ class RealtimeTemporalStressPipeline:
         t0 = time.time()
         h, w = frame_bgr.shape[:2]
 
-        # 1. Detect & Crop Face
-        (x, y, fw, fh), face_detected = self.detect_face(frame_bgr)
+        # 1. Detect & Crop Face with Bounding Box Stabilization
+        (raw_x, raw_y, raw_fw, raw_fh), face_detected = self.detect_face(frame_bgr)
+        if self.smooth_bbox is None or not face_detected:
+            self.smooth_bbox = [float(raw_x), float(raw_y), float(raw_fw), float(raw_fh)]
+        else:
+            # Low-pass filter removes frame-to-frame box vibration
+            self.smooth_bbox[0] = 0.70 * self.smooth_bbox[0] + 0.30 * raw_x
+            self.smooth_bbox[1] = 0.70 * self.smooth_bbox[1] + 0.30 * raw_y
+            self.smooth_bbox[2] = 0.70 * self.smooth_bbox[2] + 0.30 * raw_fw
+            self.smooth_bbox[3] = 0.70 * self.smooth_bbox[3] + 0.30 * raw_fh
+
+        x = int(self.smooth_bbox[0])
+        y = int(self.smooth_bbox[1])
+        fw = int(self.smooth_bbox[2])
+        fh = int(self.smooth_bbox[3])
+
         # Add slight margin to bounding box
         pad_x = int(fw * 0.08)
         pad_y = int(fh * 0.08)
@@ -216,23 +235,43 @@ class RealtimeTemporalStressPipeline:
         # 2. Extract Frame Features
         face_tensor = self.preprocess_face(face_crop)
 
-        # Grad-CAM live explanation overlay if enabled (clean thresholded overlay)
-        if self.enable_gradcam and self.gradcam is not None and face_crop.size > 0:
-            try:
-                from evaluation.gradcam import GradCAM
-                heatmap = self.gradcam.generate_heatmap(face_tensor, threshold=0.35)
-                face_overlay = GradCAM.overlay_heatmap(face_crop, heatmap, alpha=0.60)
-                frame_bgr[y1:y2, x1:x2] = face_overlay
-            except Exception:
-                pass
-
         with torch.no_grad():
             feat = self.encoder(face_tensor)  # [1, 1280]
             emotion_logits = self.phase2_model.classifier(feat)
             emotion_probs = torch.softmax(emotion_logits, dim=1).cpu().numpy()[0]
-            emotion_idx = int(np.argmax(emotion_probs))
-            emotion_name = RAFDB_IDX_TO_NAME.get(emotion_idx, "Neutral")
-            emotion_conf = float(emotion_probs[emotion_idx])
+            raw_emotion_idx = int(np.argmax(emotion_probs))
+
+            # Emotion class hysteresis: prevents flickering between close predictions
+            if self.current_target_class is None:
+                self.current_target_class = raw_emotion_idx
+            else:
+                curr_score = emotion_probs[self.current_target_class]
+                new_score = emotion_probs[raw_emotion_idx]
+                if new_score > curr_score + 0.08:
+                    self.current_target_class = raw_emotion_idx
+
+            emotion_name = RAFDB_IDX_TO_NAME.get(self.current_target_class, "Neutral")
+            emotion_conf = float(emotion_probs[self.current_target_class])
+
+        # Grad-CAM live explanation overlay (temporally smoothed EMA)
+        if self.enable_gradcam and self.gradcam is not None and face_crop.size > 0:
+            try:
+                from evaluation.gradcam import GradCAM
+                raw_heatmap = self.gradcam.generate_heatmap(
+                    face_tensor,
+                    target_class=self.current_target_class,
+                    threshold=0.30
+                )
+                if self.smooth_heatmap is None or self.smooth_heatmap.shape != raw_heatmap.shape:
+                    self.smooth_heatmap = raw_heatmap
+                else:
+                    # Temporal exponential moving average: locks heatmap stably on facial features
+                    self.smooth_heatmap = 0.75 * self.smooth_heatmap + 0.25 * raw_heatmap
+
+                face_overlay = GradCAM.overlay_heatmap(face_crop, self.smooth_heatmap, alpha=0.60)
+                frame_bgr[y1:y2, x1:x2] = face_overlay
+            except Exception:
+                pass
 
         # 3. Update Rolling Feature Buffer
         self.feature_buffer.append(feat.squeeze(0).cpu())

@@ -82,6 +82,8 @@ class GradCAM:
 
         cam = F.relu(cam).cpu().numpy()
         cam = cv2.resize(cam, (224, 224))
+        # Spatial smoothing to eliminate pixel-level gradient spikes
+        cam = cv2.GaussianBlur(cam, (15, 15), 0)
 
         # Normalize to [0, 1]
         cam_min, cam_max = cam.min(), cam.max()
