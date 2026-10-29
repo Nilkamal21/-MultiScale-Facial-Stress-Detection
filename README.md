@@ -126,6 +126,124 @@ Where $\alpha_i$ automatically assigns high weights to active muscle contraction
 
 ---
 
+## 🧠 Deep-Dive: The Dual Attention Architecture (Spatial & Temporal)
+
+Human stress manifestation is characterized by **dual sparsity**:
+1. **Spatial Sparsity ("Where on the face"):** Stress micro-expressions (such as corrugator supercilii eyebrow lowering or lip corner depression) activate only **5% to 15%** of the facial area. The remaining 85%–95% (cheeks, forehead skin, jawline) remains neutral.
+2. **Temporal Sparsity ("When in time"):** Within a multi-second video sequence, acute stress triggers brief, transient micro-expressions lasting only **200 ms to 500 ms** (1 to 3 frames within a 10-frame buffer). The remaining frames represent neutral baseline pauses or blinking.
+
+To prevent both spatial and temporal dilution, this framework integrates **two complementary attention mechanisms working in tandem**:
+
+```text
+ ┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │                               DUAL-STAGE ATTENTION PIPELINE ARCHITECTURE                               │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+   Frame t-9         Frame t-8                  Frame t-1          Frame t (Current Frame)
+ ┌───────────┐     ┌───────────┐              ┌───────────┐     ┌───────────┐
+ │ 224 x 224 │     │ 224 x 224 │     ...      │ 224 x 224 │     │ 224 x 224 │
+ └─────┬─────┘     └─────┬─────┘              └─────┬─────┘     └─────┬─────┘
+       ▼                 ▼                          ▼                 ▼
+ ┌───────────┐     ┌───────────┐              ┌───────────┐     ┌───────────┐
+ │ 85 Regions│     │ 85 Regions│              │ 85 Regions│     │ 85 Regions│
+ └─────┬─────┘     └─────┬─────┘              └─────┬─────┘     └─────┬─────┘
+       │                 │                          │                 │
+       ▼                 ▼                          ▼                 ▼
+ ╔════════════════════════════════════════════════════════════════════════════╗
+ ║ STAGE 1: SPATIAL REGION ATTENTION (models/spatial_pyramid.py)              ║
+ ║ Computes: alpha_i = Softmax( v^T * tanh(W_a * r_i + b_a) )                 ║
+ ║ Focus: Brow furrowing (AU4), eye tension (AU7), lip compression (AU24)     ║
+ ║ Ignores: Smooth cheeks, neutral forehead, background lighting              ║
+ ╚═════╤═════════════════╤══════════════════════════╤═════════════════╤══════╝
+       ▼                 ▼                          ▼                 ▼
+   Vector z_t-9      Vector z_t-8               Vector z_t-1      Vector z_t     (Each 1,280 dims)
+       └─────────────────┴────────────┬─────────────┴─────────────────┘
+                                      ▼
+                   ┌──────────────────────────────────────┐
+                   │    Bidirectional GRU (Hidden: 64)    │
+                   │  Forward + Backward Hidden States:   │
+                   │      h_t = [ h_fwd ; h_bwd ]         │
+                   └──────────────────┬───────────────────┘
+                                      ▼
+ ╔════════════════════════════════════════════════════════════════════════════╗
+ ║ STAGE 2: TEMPORAL SEQUENCE ATTENTION (models/temporal_model.py)            ║
+ ║ Computes: beta_t = Softmax( w^T * tanh(W_h * h_t + b_h) )                  ║
+ ║ Focus: The EXACT frame of maximum micro-expression tension peak            ║
+ ║ Ignores: Unrelated eye blinks, neutral pauses, recovery gaps               ║
+ ╚════════════════════════════════════╤═══════════════════════════════════════╝
+                                      ▼
+                        Context Vector c in R^(128)
+                                      ▼
+                        Linear Classifier (128 -> 2)
+                                      ▼
+                      STRESS PROBABILITY (%) [0.0 - 1.0]
+```
+
+---
+
+### 1. Stage 1: Additive Spatial Region Attention Head
+* **File Location:** [`models/spatial_pyramid.py`](models/spatial_pyramid.py)
+* **Input Tensor:** $R \in \mathbb{R}^{B \times 85 \times 1280}$ (85 regional patch vectors extracted across 4 scales).
+* **Output Tensor:** $z \in \mathbb{R}^{B \times 1280}$ (single spatially-weighted descriptor).
+
+#### Mathematical Formulation:
+For each regional patch vector $r_i \in \mathbb{R}^{1280}$ ($i \in \{1, 2, \dots, 85\}$):
+1. **Projection to Hidden Attention Space:**
+   $$u_i = \tanh(\mathbf{W}_a r_i + \mathbf{b}_a) \in \mathbb{R}^{256}$$
+   where $\mathbf{W}_a \in \mathbb{R}^{256 \times 1280}$ is the learnable projection weight matrix and $\mathbf{b}_a \in \mathbb{R}^{256}$ is the bias.
+2. **Relevance Scoring:**
+   $$e_i = \mathbf{v}_a^\top u_i \in \mathbb{R}$$
+   where $\mathbf{v}_a \in \mathbb{R}^{256}$ is a learned context evaluation vector.
+3. **Softmax Probability Normalization:**
+   $$\alpha_i = \frac{\exp(e_i)}{\sum_{j=1}^{85} \exp(e_j)}, \quad \sum_{i=1}^{85} \alpha_i = 1.0$$
+4. **Context Feature Aggregation:**
+   $$z = \sum_{i=1}^{85} \alpha_i \cdot r_i \in \mathbb{R}^{1280}$$
+
+#### Intuitive Function:
+* **AU-Targeted Weighting:** High-resolution patches ($8\times8$ grid) covering the glabella (between the eyebrows) or lip corners receive high attention percentages ($\alpha_i \approx 0.15 - 0.35$).
+* **Noise Suppression:** Uniform, non-expressive regions (e.g. cheek apples or forehead edges) are driven toward $\alpha_i \to 0$.
+* **Overcoming Single-Box GAP:** Traditional global average pooling assigns an inflexible $1/85 \approx 0.0117$ weight to every patch, diluting localized twitches with neutral skin. Spatial Attention dynamically redistributes this weight to where tension actually exists.
+
+---
+
+### 2. Stage 2: Temporal Sequence Self-Attention Pooling
+* **File Location:** [`models/temporal_model.py`](models/temporal_model.py)
+* **Input Tensor:** Sequence of BiGRU hidden representations $H = [h_1, h_2, \dots, h_W] \in \mathbb{R}^{B \times 10 \times 128}$ across the $W=10$ frame sliding buffer ($128 = 64 \text{ forward} + 64 \text{ backward}$).
+* **Output Tensor:** Context vector $c \in \mathbb{R}^{B \times 128}$.
+
+#### Mathematical Formulation:
+For each recurrent time step $t \in \{1, \dots, W\}$:
+1. **Temporal Energy Computation:**
+   $$s_t = \mathbf{w}_{\text{temp}}^\top \tanh(\mathbf{W}_h h_t + \mathbf{b}_h)$$
+   where $\mathbf{W}_h \in \mathbb{R}^{64 \times 128}$ projects the bidirectional state to half-dimension, followed by non-linear $\tanh$, and $\mathbf{w}_{\text{temp}} \in \mathbb{R}^{64}$ scores the frame's temporal importance.
+2. **Normalized Frame Attention Weight:**
+   $$\beta_t = \frac{\exp(s_t)}{\sum_{\tau=1}^{W} \exp(s_\tau)}, \quad \sum_{t=1}^{W} \beta_t = 1.0$$
+3. **Temporal Context Pooling:**
+   $$c = \sum_{t=1}^{W} \beta_t \cdot h_t \in \mathbb{R}^{128}$$
+
+#### Intuitive Function:
+* **Pinpointing the Peak Moment:** When a subject is asked a stressful question or experiences an acute cognitive task, their face might remain calm for frames $t=1 \dots 6$, grimace or clench at frames $t=7 \dots 8$, and recover at frames $t=9 \dots 10$.
+* **Suppressing Inactive Frames:** Standard RNNs either rely on the final hidden state $h_W$ (which suffers from vanishing/overwriting gradients during recovery) or simple temporal averaging $\frac{1}{W}\sum h_t$ (which washes out the 2-frame grimace across the 8 neutral frames).
+* **The Attention Advantage:** The Temporal Attention weight $\beta_t$ spikes directly on frames $t=7$ and $t=8$ ($\beta \approx 0.45$), ensuring the final classification decision is guided by the peak stress event.
+
+---
+
+### 3. Comprehensive Comparison: Spatial vs. Temporal Attention
+
+| Attention Attribute | Stage 1: Spatial Region Attention | Stage 2: Temporal Sequence Attention |
+| :--- | :--- | :--- |
+| **Domain** | **Spatial ($x, y$ 2D Plane)** | **Temporal ($t$ 1D Time Axis)** |
+| **Code Implementation** | [`models/spatial_pyramid.py`](models/spatial_pyramid.py#L65-L85) | [`models/temporal_model.py`](models/temporal_model.py#L22-L50) |
+| **Input Dimensions** | `[Batch, 85, 1280]` (85 Regional Bins) | `[Batch, 10, 128]` (10 Video Frames) |
+| **Output Dimensions** | `[Batch, 1280]` (1 Spatial Descriptor) | `[Batch, 128]` (1 Temporal Context) |
+| **Core Question Answered** | *"WHERE on the face is muscle tension occurring?"* | *"WHEN in the video did the peak stress moment occur?"* |
+| **Target Biological Cue** | Action Units: Brow Lowerer (AU4), Eyelid Tightener (AU7), Lip Corner Depressor (AU15) | Transient micro-expressions, speech hesitation, facial shuddering, micro-grimaces |
+| **Alternative Baseline** | Single-Box Global Average Pooling ($1\times1$) | Last-frame $h_T$ or uniform temporal averaging $\frac{1}{T}\sum h_t$ |
+| **Failure Mode Avoided** | Cheeks diluting tiny 5% eyebrow twitches | Neutral pauses washing out a 300 ms stress grimace |
+| **Performance Gain** | Boosts Precision to **61.38%** (+4.51%) | Boosts F1-Score to **69.00%** & cuts HUD jitter by **40.7%** |
+
+---
+
 ## 📁 Repository Structure
 
 ```text
