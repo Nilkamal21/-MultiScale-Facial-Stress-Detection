@@ -23,7 +23,7 @@ import config
 from models.efficientnet_encoder import EfficientNetEncoder
 
 
-def generate_simple_grid(image_path="data/sample_face.jpg", ckpt_path="models_checkpoints/best_rafdb_affective_model.pth", output_path="results/simple_85_regions.png"):
+def generate_simple_grid(image_path="data/subject_face.jpg", ckpt_path="models_checkpoints/best_rafdb_affective_model.pth", output_path="results/simple_85_regions.png"):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -119,4 +119,8 @@ def generate_simple_grid(image_path="data/sample_face.jpg", ckpt_path="models_ch
 
 
 if __name__ == "__main__":
-    generate_simple_grid()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--image", default="data/subject_face.jpg", help="Path to input face image")
+    args = parser.parse_args()
+    generate_simple_grid(image_path=args.image)
