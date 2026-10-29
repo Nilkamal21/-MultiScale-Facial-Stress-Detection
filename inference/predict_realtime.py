@@ -68,10 +68,10 @@ class RealtimeTemporalStressPipeline:
 
         self.phase2_model = self.phase2_model.to(self.device).eval()
 
-        # Initialize Grad-CAM++ after phase2_model is loaded
+        # Initialize Grad-CAM after phase2_model is loaded
         if self.enable_gradcam:
-            from evaluation.gradcam_plus_plus import GradCAMPlusPlus
-            self.gradcam = GradCAMPlusPlus(self.phase2_model)
+            from evaluation.gradcam import GradCAM
+            self.gradcam = GradCAM(self.phase2_model)
 
         # 2. Recurrent Temporal Model (Phase 3 GRU)
         phase3_ckpt = os.path.join(config.CHECKPOINTS_DIR, "best_temporal_stress_model.pth")
@@ -112,25 +112,35 @@ class RealtimeTemporalStressPipeline:
             transforms.Normalize(mean=config.IMAGENET_MEAN, std=config.IMAGENET_STD)
         ])
 
-        # 5. Face Detector (MediaPipe BlazeFace with robust fallback)
+        # 5. Face Detector (OpenCV Haar Cascade + MediaPipe)
+        self.haar_cascade = None
+        haar_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+        if os.path.exists(haar_path):
+            self.haar_cascade = cv2.CascadeClassifier(haar_path)
+            print(f"[Face Detector] OpenCV Haar Cascade loaded: {haar_path}")
+
         try:
             from preprocessing.mediapipe_face_detector import MediaPipeFaceDetector
             self.detector = MediaPipeFaceDetector()
             print("[Face Detector] MediaPipe BlazeFace initialized successfully.")
         except Exception as e:
-            print(f"[Face Detector] MediaPipe unavailable ({e}), using center-face tracker.")
             self.detector = None
+            if self.haar_cascade is not None:
+                print("[Face Detector] MediaPipe unavailable; using OpenCV Haar Cascade for tight face tracking.")
+            else:
+                print(f"[Face Detector] Face detector fallback active ({e}).")
 
         print(f"[Pipeline] Initialized on {self.device} (Buffer={window_size}, SmoothK={smooth_k})")
 
     def detect_face(self, frame_bgr):
-        """Detects the primary face bounding box (x, y, w, h) via MediaPipe or crop heuristic."""
+        """Detects the primary face bounding box (x, y, w, h) via MediaPipe or OpenCV Haar Cascade."""
         h, w = frame_bgr.shape[:2]
 
         # If already cropped face (square-ish and standard size), return full frame
         if 0.75 <= (w / h) <= 1.25 and w <= 320:
             return (0, 0, w, h), True
 
+        # 1. MediaPipe detection
         if self.detector is not None:
             try:
                 rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -141,8 +151,27 @@ class RealtimeTemporalStressPipeline:
             except Exception:
                 pass
 
-        # Fallback: center crop
-        crop_dim = int(min(h, w) * 0.85)
+        # 2. OpenCV Haar Cascade (tight, accurate face detection)
+        if self.haar_cascade is not None:
+            try:
+                gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+                faces = self.haar_cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=1.1,
+                    minNeighbors=5,
+                    minSize=(70, 70),
+                    flags=cv2.CASCADE_SCALE_IMAGE
+                )
+                if len(faces) > 0:
+                    # Pick largest face
+                    largest = max(faces, key=lambda f: f[2] * f[3])
+                    fx, fy, fw, fh = largest
+                    return (int(fx), int(fy), int(fw), int(fh)), True
+            except Exception:
+                pass
+
+        # 3. Fallback: conservative center crop (45% of frame)
+        crop_dim = int(min(h, w) * 0.45)
         x1 = (w - crop_dim) // 2
         y1 = (h - crop_dim) // 2
         return (x1, y1, crop_dim, crop_dim), False
@@ -155,12 +184,12 @@ class RealtimeTemporalStressPipeline:
         return tensor
 
     def toggle_gradcam(self):
-        """Toggles Grad-CAM++ live overlay on/off."""
+        """Toggles Grad-CAM live overlay on/off."""
         self.enable_gradcam = not self.enable_gradcam
         if self.enable_gradcam and self.gradcam is None:
-            from evaluation.gradcam_plus_plus import GradCAMPlusPlus
-            self.gradcam = GradCAMPlusPlus(self.phase2_model)
-        print(f"[Grad-CAM++] Live overlay {'ENABLED' if self.enable_gradcam else 'DISABLED'}")
+            from evaluation.gradcam import GradCAM
+            self.gradcam = GradCAM(self.phase2_model)
+        print(f"[Grad-CAM] Live overlay {'ENABLED' if self.enable_gradcam else 'DISABLED'}")
 
     def process_frame(self, frame_bgr):
         """
@@ -187,14 +216,12 @@ class RealtimeTemporalStressPipeline:
         # 2. Extract Frame Features
         face_tensor = self.preprocess_face(face_crop)
 
-        # Grad-CAM++ live explanation overlay if enabled
+        # Grad-CAM live explanation overlay if enabled (clean thresholded overlay)
         if self.enable_gradcam and self.gradcam is not None and face_crop.size > 0:
             try:
-                heatmap, _, _ = self.gradcam.generate_heatmap(face_tensor)
-                h_fc, w_fc = face_crop.shape[:2]
-                heatmap_resized = cv2.resize(heatmap, (w_fc, h_fc))
-                heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET)
-                face_overlay = cv2.addWeighted(face_crop, 0.40, heatmap_color, 0.60, 0)
+                from evaluation.gradcam import GradCAM
+                heatmap = self.gradcam.generate_heatmap(face_tensor, threshold=0.35)
+                face_overlay = GradCAM.overlay_heatmap(face_crop, heatmap, alpha=0.60)
                 frame_bgr[y1:y2, x1:x2] = face_overlay
             except Exception:
                 pass
@@ -416,7 +443,7 @@ def run_webcam_mode(cam_id=0, enable_gradcam=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 4: Real-Time Temporal Stress Inference")
     parser.add_argument("--webcam", nargs="?", const=0, type=int, default=None, help="Launch live webcam (e.g. --webcam or --webcam 0)")
-    parser.add_argument("--gradcam", action="store_true", help="Enable Grad-CAM++ Explainable AI overlay on face (toggle with 'g' key)")
+    parser.add_argument("--gradcam", action="store_true", help="Enable Grad-CAM Explainable AI overlay on face (toggle with 'g' key)")
     parser.add_argument("--sequence", type=str, default=None, help="Path to sequence directory")
     args = parser.parse_args()
 
