@@ -42,9 +42,6 @@ class RealtimeTemporalStressPipeline:
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.enable_gradcam = enable_gradcam
         self.gradcam = None
-        if self.enable_gradcam:
-            from evaluation.gradcam_plus_plus import GradCAMPlusPlus
-            self.gradcam = GradCAMPlusPlus(self.phase2_model)
 
         # 1. Feature Extractor (Phase 2 Model)
         self.encoder = EfficientNetEncoder(pretrained=False)
@@ -70,6 +67,11 @@ class RealtimeTemporalStressPipeline:
             print("[WARN] Phase 2 model checkpoint not found! Using initialized weights.")
 
         self.phase2_model = self.phase2_model.to(self.device).eval()
+
+        # Initialize Grad-CAM++ after phase2_model is loaded
+        if self.enable_gradcam:
+            from evaluation.gradcam_plus_plus import GradCAMPlusPlus
+            self.gradcam = GradCAMPlusPlus(self.phase2_model)
 
         # 2. Recurrent Temporal Model (Phase 3 GRU)
         phase3_ckpt = os.path.join(config.CHECKPOINTS_DIR, "best_temporal_stress_model.pth")
