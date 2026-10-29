@@ -36,10 +36,15 @@ class RealtimeTemporalStressPipeline:
     End-to-End Real-Time Temporal Stress & Affect Inference Engine.
     Maintains a rolling temporal buffer of 10 frames and applies moving-average smoothing.
     """
-    def __init__(self, window_size=10, smooth_k=3, device=None):
+    def __init__(self, window_size=10, smooth_k=3, enable_gradcam=False, device=None):
         self.window_size = window_size
         self.smooth_k = smooth_k
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.enable_gradcam = enable_gradcam
+        self.gradcam = None
+        if self.enable_gradcam:
+            from evaluation.gradcam_plus_plus import GradCAMPlusPlus
+            self.gradcam = GradCAMPlusPlus(self.phase2_model)
 
         # 1. Feature Extractor (Phase 2 Model)
         self.encoder = EfficientNetEncoder(pretrained=False)
@@ -147,6 +152,14 @@ class RealtimeTemporalStressPipeline:
         tensor = self.transform(face_resized).unsqueeze(0).to(self.device)  # [1, 3, 224, 224]
         return tensor
 
+    def toggle_gradcam(self):
+        """Toggles Grad-CAM++ live overlay on/off."""
+        self.enable_gradcam = not self.enable_gradcam
+        if self.enable_gradcam and self.gradcam is None:
+            from evaluation.gradcam_plus_plus import GradCAMPlusPlus
+            self.gradcam = GradCAMPlusPlus(self.phase2_model)
+        print(f"[Grad-CAM++] Live overlay {'ENABLED' if self.enable_gradcam else 'DISABLED'}")
+
     def process_frame(self, frame_bgr):
         """
         Executes real-time inference on a single incoming frame:
@@ -171,6 +184,19 @@ class RealtimeTemporalStressPipeline:
 
         # 2. Extract Frame Features
         face_tensor = self.preprocess_face(face_crop)
+
+        # Grad-CAM++ live explanation overlay if enabled
+        if self.enable_gradcam and self.gradcam is not None and face_crop.size > 0:
+            try:
+                heatmap, _, _ = self.gradcam.generate_heatmap(face_tensor)
+                h_fc, w_fc = face_crop.shape[:2]
+                heatmap_resized = cv2.resize(heatmap, (w_fc, h_fc))
+                heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET)
+                face_overlay = cv2.addWeighted(face_crop, 0.40, heatmap_color, 0.60, 0)
+                frame_bgr[y1:y2, x1:x2] = face_overlay
+            except Exception:
+                pass
+
         with torch.no_grad():
             feat = self.encoder(face_tensor)  # [1, 1280]
             emotion_logits = self.phase2_model.classifier(feat)
@@ -357,9 +383,9 @@ def run_sequence_demo(sequence_folder=None):
     return summary
 
 
-def run_webcam_mode(cam_id=0):
+def run_webcam_mode(cam_id=0, enable_gradcam=False):
     """Runs live real-time webcam inference with interactive HUD window."""
-    pipeline = RealtimeTemporalStressPipeline(window_size=10, smooth_k=3)
+    pipeline = RealtimeTemporalStressPipeline(window_size=10, smooth_k=3, enable_gradcam=enable_gradcam)
     cap = cv2.VideoCapture(cam_id)
 
     if not cap.isOpened():
@@ -378,6 +404,8 @@ def run_webcam_mode(cam_id=0):
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q') or key == 27:
             break
+        elif key == ord('g') or key == ord('G'):
+            pipeline.toggle_gradcam()
 
     cap.release()
     cv2.destroyAllWindows()
@@ -386,10 +414,11 @@ def run_webcam_mode(cam_id=0):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 4: Real-Time Temporal Stress Inference")
     parser.add_argument("--webcam", nargs="?", const=0, type=int, default=None, help="Launch live webcam (e.g. --webcam or --webcam 0)")
+    parser.add_argument("--gradcam", action="store_true", help="Enable Grad-CAM++ Explainable AI overlay on face (toggle with 'g' key)")
     parser.add_argument("--sequence", type=str, default=None, help="Path to sequence directory")
     args = parser.parse_args()
 
     if args.webcam is not None:
-        run_webcam_mode(cam_id=args.webcam)
+        run_webcam_mode(cam_id=args.webcam, enable_gradcam=args.gradcam)
     else:
         run_sequence_demo(args.sequence)
